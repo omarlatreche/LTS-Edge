@@ -37,11 +37,12 @@ input double   MinCandleSizePips      = 5.0;     // Min candle size to avoid low
 input double   MinADRPips             = 40.0;    // Min Average Daily Range (pips)
 input double   MaxADRPips             = 200.0;   // Max Average Daily Range (pips)
 
-// --- Session Filter (server time) ---
-input int      SessionStartHour       = 8;       // Session start hour
-input int      SessionStartMinute     = 0;       // Session start minute
-input int      SessionEndHour         = 11;      // Session end hour
-input int      SessionEndMinute       = 0;       // Session end minute
+// --- Session Filter (UK time — auto-converted to server time) ---
+input int      SessionStartHour       = 8;       // London session start hour (UK time)
+input int      SessionStartMinute     = 0;       // London session start minute
+input int      SessionEndHour         = 11;      // London session end hour (UK time)
+input int      SessionEndMinute       = 0;       // London session end minute
+input int      BrokerUTCOffset        = 2;       // Broker server UTC offset (e.g. 2 for UTC+2, 0 for UTC)
 
 // --- Day Filter ---
 input bool     TradeMonday            = false;   // Allow trades on Monday
@@ -232,6 +233,9 @@ bool PassesAllFilters()
 
 //+------------------------------------------------------------------+
 //| Check if current time is within trading session                   |
+//| Converts UK time inputs to broker server time using UTC offset    |
+//| UK = UTC+0 (winter) / UTC+1 (BST). Broker offset is from UTC.    |
+//| Example: UK 08:00, broker UTC+2 → server 10:00                   |
 //+------------------------------------------------------------------+
 bool IsWithinSession()
 {
@@ -239,10 +243,21 @@ bool IsWithinSession()
    int minute = TimeMinute(TimeCurrent());
 
    int currentMinutes = hour * 60 + minute;
-   int startMinutes   = SessionStartHour * 60 + SessionStartMinute;
-   int endMinutes     = SessionEndHour * 60 + SessionEndMinute;
 
-   return (currentMinutes >= startMinutes && currentMinutes < endMinutes);
+   // Convert UK session times to broker server time
+   // UK is UTC+0 (GMT). Add broker offset to convert.
+   int startMinutes   = (SessionStartHour + BrokerUTCOffset) * 60 + SessionStartMinute;
+   int endMinutes     = (SessionEndHour + BrokerUTCOffset) * 60 + SessionEndMinute;
+
+   // Handle wrap-around past midnight (e.g. offset pushes end past 24:00)
+   startMinutes = startMinutes % (24 * 60);
+   endMinutes   = endMinutes % (24 * 60);
+
+   if(startMinutes < endMinutes)
+      return (currentMinutes >= startMinutes && currentMinutes < endMinutes);
+   else
+      // Wraps past midnight
+      return (currentMinutes >= startMinutes || currentMinutes < endMinutes);
 }
 
 //+------------------------------------------------------------------+
