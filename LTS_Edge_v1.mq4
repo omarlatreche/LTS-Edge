@@ -2,10 +2,11 @@
 //|                                                  LTS_Edge_v1.mq4 |
 //|                        Trend-Following Pullback EA with Filters   |
 //|                        Dual-timeframe: M15 trend + M5 entry       |
+//|                        v1.1 — Bug fixes + Diagnostics              |
 //+------------------------------------------------------------------+
 #property copyright "LTS Edge v1"
 #property link      ""
-#property version   "1.00"
+#property version   "1.10"
 #property strict
 
 //+------------------------------------------------------------------+
@@ -42,7 +43,8 @@ input int      SessionStartHour       = 8;       // London session start hour (U
 input int      SessionStartMinute     = 0;       // London session start minute
 input int      SessionEndHour         = 11;      // London session end hour (UK time)
 input int      SessionEndMinute       = 0;       // London session end minute
-input int      BrokerUTCOffset        = 2;       // Broker server UTC offset (e.g. 2 for UTC+2, 0 for UTC)
+input int      BrokerUTCOffset        = 2;       // Broker server UTC offset (e.g. 2 for UTC+2)
+input bool     UKSummerTime           = false;   // UK is on BST (UTC+1) — set true late Mar-Oct
 
 // --- Day Filter ---
 input bool     TradeMonday            = false;   // Allow trades on Monday
@@ -61,6 +63,9 @@ input double   MinEMASlopePoints      = 10.0;    // Min 200 EMA slope over 5 bar
 // --- Trade Limits ---
 input int      MaxTradesPerDay        = 3;       // Max trades per day
 
+// --- Diagnostics ---
+input bool     EnableDiagnostics      = true;    // Log detailed filter/signal results per bar
+
 // --- System ---
 input int      MagicNumber            = 12345;   // EA magic number
 input int      Slippage               = 3;       // Max slippage (points)
@@ -68,11 +73,28 @@ input int      Slippage               = 3;       // Max slippage (points)
 //+------------------------------------------------------------------+
 //| Global Variables                                                  |
 //+------------------------------------------------------------------+
-datetime g_lastBarTime = 0;         // Track last processed bar time
-double   g_pipSize     = 0;         // Pip size for this symbol
-int      g_pipDigits   = 0;         // Number of digits for pip rounding
-string   g_commentTag  = "LTSv1";   // Order comment prefix
-double   g_startBalance = 0;        // Balance at start of day for DD calc
+datetime g_lastBarTime    = 0;         // Track last processed bar time
+double   g_pipSize        = 0;         // Pip size for this symbol
+int      g_pipDigits      = 0;         // Number of digits for pip rounding
+string   g_commentTag     = "LTSv1";   // Order comment prefix
+double   g_startBalance   = 0;         // Balance at start of day for DD calc
+
+// --- Partial close tracking (Bug 1 fix) ---
+int      g_partialTickets[100];        // Tickets that have been partially closed
+int      g_partialCount   = 0;         // Number of tracked partial closes
+
+// --- Original SL distance tracking (Bug 2 fix) ---
+int      g_slTickets[100];             // Tickets with stored SL distances
+double   g_slDistances[100];           // Original SL distances (price units)
+int      g_slCount        = 0;         // Number of tracked SL distances
+
+// --- Session diagnostics counters ---
+int      g_sessionBarsChecked   = 0;
+int      g_sessionFiltersPassed = 0;
+int      g_sessionSignalsFound  = 0;
+int      g_sessionTrades        = 0;
+bool     g_sessionSummaryPrinted = false;
+int      g_lastSessionDay       = -1;
 
 //+------------------------------------------------------------------+
 //| Expert initialization                                             |
@@ -93,7 +115,24 @@ int OnInit()
 
    g_startBalance = AccountBalance();
 
-   Print("LTS Edge v1 initialized. Pip size: ", g_pipSize, " Digits: ", Digits);
+   // Log session window in server time for verification
+   int ukOffset = UKSummerTime ? 1 : 0;
+   int serverStart = SessionStartHour - ukOffset + BrokerUTCOffset;
+   int serverEnd   = SessionEndHour - ukOffset + BrokerUTCOffset;
+   // Handle wrap
+   if(serverStart < 0) serverStart += 24;
+   if(serverEnd < 0) serverEnd += 24;
+   serverStart = serverStart % 24;
+   serverEnd   = serverEnd % 24;
+
+   Print("LTS Edge v1.1 initialized. Pip size: ", g_pipSize, " Digits: ", Digits);
+   Print("Session: ", SessionStartHour, ":00-", SessionEndHour, ":00 UK",
+         (UKSummerTime ? " (BST)" : " (GMT)"),
+         " = ", serverStart, ":00-", serverEnd, ":00 server (UTC+", BrokerUTCOffset, ")");
+   Print("Inputs: Risk=", RiskPercent, "% RR=", RiskRewardRatio,
+         " ATR_SL=", UseATRStopLoss, " ATR_Period=", ATRPeriod,
+         " ATR_Mult=", ATRMultiplier);
+
    return(INIT_SUCCEEDED);
 }
 
@@ -102,7 +141,8 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
-   Print("LTS Edge v1 removed. Reason: ", reason);
+   Comment("");  // Clear chart overlay
+   Print("LTS Edge v1.1 removed. Reason: ", reason);
 }
 
 //+------------------------------------------------------------------+
@@ -113,12 +153,21 @@ void OnTick()
    // Always manage open trades (trailing, BE, partial close)
    ManageOpenTrades();
 
+   // Update on-chart display
+   UpdateChartDisplay();
+
    // Only check for new entries on a new M5 bar
    if(!IsNewBar())
       return;
 
    // Reset daily balance tracker at start of new day
    ResetDailyBalance();
+
+   // Reset session counters at start of new session day
+   ResetSessionCounters();
+
+   // Print session summary after session ends
+   CheckSessionEnd();
 
    // Skip if we already have an open trade on this symbol
    if(HasOpenTrade())
@@ -128,13 +177,23 @@ void OnTick()
    if(!PassesAllFilters())
       return;
 
+   // Filters passed — check for entry signals
+   g_sessionFiltersPassed++;
+
    // Check for entry signals
-   if(CheckBuySignal())
+   int buyResult  = CheckBuySignalDiag();
+   int sellResult = CheckSellSignalDiag();
+
+   if(buyResult == 1)
    {
+      g_sessionSignalsFound++;
+      g_sessionTrades++;
       ExecuteBuy();
    }
-   else if(CheckSellSignal())
+   else if(sellResult == 1)
    {
+      g_sessionSignalsFound++;
+      g_sessionTrades++;
       ExecuteSell();
    }
 }
@@ -168,95 +227,138 @@ void ResetDailyBalance()
 }
 
 //+------------------------------------------------------------------+
+//| Reset session diagnostic counters at start of each session day    |
+//+------------------------------------------------------------------+
+void ResetSessionCounters()
+{
+   int today = TimeDay(TimeCurrent());
+   if(today != g_lastSessionDay)
+   {
+      g_sessionBarsChecked   = 0;
+      g_sessionFiltersPassed = 0;
+      g_sessionSignalsFound  = 0;
+      g_sessionTrades        = 0;
+      g_sessionSummaryPrinted = false;
+      g_lastSessionDay       = today;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Print session summary after session ends                          |
+//+------------------------------------------------------------------+
+void CheckSessionEnd()
+{
+   if(g_sessionSummaryPrinted)
+      return;
+
+   // Check if we're past session end
+   int hour   = TimeHour(TimeCurrent());
+   int minute = TimeMinute(TimeCurrent());
+   int currentMinutes = hour * 60 + minute;
+
+   int ukOffset = UKSummerTime ? 1 : 0;
+   int endMinutes = (SessionEndHour - ukOffset + BrokerUTCOffset) * 60 + SessionEndMinute;
+   endMinutes = endMinutes % (24 * 60);
+   if(endMinutes < 0) endMinutes += 24 * 60;
+
+   // Only print summary if we're past session end AND we checked at least 1 bar
+   if(currentMinutes >= endMinutes && g_sessionBarsChecked > 0)
+   {
+      Print("=== SESSION SUMMARY: ", g_sessionBarsChecked, " bars checked | ",
+            g_sessionFiltersPassed, " passed filters | ",
+            g_sessionSignalsFound, " signals | ",
+            g_sessionTrades, " trades ===");
+      g_sessionSummaryPrinted = true;
+   }
+}
+
+//+------------------------------------------------------------------+
 //|                     FILTER FUNCTIONS                               |
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
 //| Master filter check — all conditions must pass                    |
+//| With diagnostic logging when enabled                              |
 //+------------------------------------------------------------------+
 bool PassesAllFilters()
 {
-   // Spread filter
+   bool inSession = IsWithinSession();
+
+   // If not in session, skip everything (no diagnostics outside session)
+   if(!inSession)
+      return false;
+
+   // We're in session — count this bar
+   g_sessionBarsChecked++;
+
+   // Evaluate all filters, log results when diagnostics enabled
    double spreadPips = (Ask - Bid) / g_pipSize;
-   if(spreadPips > MaxSpreadPips)
-   {
-      return false;
-   }
+   bool spreadOK = (spreadPips <= MaxSpreadPips);
 
-   // Session time filter
-   if(!IsWithinSession())
-   {
-      return false;
-   }
+   bool dayOK = IsTradingDay();
 
-   // Day of week filter
-   if(!IsTradingDay())
-   {
-      return false;
-   }
+   int tradesToday = CountTradesToday();
+   bool tradesOK = (tradesToday < MaxTradesPerDay);
 
-   // Max trades per day
-   if(CountTradesToday() >= MaxTradesPerDay)
-   {
-      return false;
-   }
-
-   // Minimum candle size on M5 (last closed bar)
    double candleSize = MathAbs(iHigh(Symbol(), PERIOD_M5, 1) - iLow(Symbol(), PERIOD_M5, 1)) / g_pipSize;
-   if(candleSize < MinCandleSizePips)
-   {
-      return false;
-   }
+   bool candleOK = (candleSize >= MinCandleSizePips);
 
-   // ADR filter
    double adr = GetADR();
-   if(adr < MinADRPips || adr > MaxADRPips)
-   {
-      return false;
-   }
+   bool adrOK = (adr >= MinADRPips && adr <= MaxADRPips);
 
-   // Daily drawdown limit
-   if(CheckDailyDrawdown())
-   {
-      return false;
-   }
+   bool ddOK = !CheckDailyDrawdown();
 
-   // EMA 200 slope filter — market must be trending
    double slope = GetEMA200Slope();
-   if(MathAbs(slope) < MinEMASlopePoints * Point)
+   double slopeThreshold = MinEMASlopePoints * Point;
+   bool slopeOK = (MathAbs(slope) >= slopeThreshold);
+
+   bool allPass = spreadOK && dayOK && tradesOK && candleOK && adrOK && ddOK && slopeOK;
+
+   if(EnableDiagnostics)
    {
-      return false;
+      string msg = "[FILTER] ";
+      msg += "Spread:" + DoubleToString(spreadPips, 1) + (spreadOK ? " OK" : " FAIL") + " | ";
+      msg += "Day:" + (dayOK ? "OK" : "FAIL") + " | ";
+      msg += "Trades:" + IntegerToString(tradesToday) + "/" + IntegerToString(MaxTradesPerDay) + (tradesOK ? " OK" : " FAIL") + " | ";
+      msg += "Candle:" + DoubleToString(candleSize, 1) + (candleOK ? " OK" : " FAIL(" + DoubleToString(MinCandleSizePips, 1) + ")") + " | ";
+      msg += "ADR:" + DoubleToString(adr, 0) + (adrOK ? " OK" : " FAIL") + " | ";
+      msg += "DD:" + (ddOK ? "OK" : "FAIL") + " | ";
+      msg += "Slope:" + DoubleToString(MathAbs(slope) / Point, 1) + "pt" + (slopeOK ? " OK" : " FAIL(" + DoubleToString(MinEMASlopePoints, 1) + ")");
+      msg += allPass ? " >>> ALL PASS" : "";
+      Print(msg);
    }
 
-   return true;
+   return allPass;
 }
 
 //+------------------------------------------------------------------+
 //| Check if current time is within trading session                   |
-//| Converts UK time inputs to broker server time using UTC offset    |
-//| UK = UTC+0 (winter) / UTC+1 (BST). Broker offset is from UTC.    |
-//| Example: UK 08:00, broker UTC+2 → server 10:00                   |
+//| Converts UK time to broker server time using UTC offset           |
+//| Accounts for UK summer time (BST = UTC+1)                        |
 //+------------------------------------------------------------------+
 bool IsWithinSession()
 {
    int hour   = TimeHour(TimeCurrent());
    int minute = TimeMinute(TimeCurrent());
-
    int currentMinutes = hour * 60 + minute;
 
-   // Convert UK session times to broker server time
-   // UK is UTC+0 (GMT). Add broker offset to convert.
-   int startMinutes   = (SessionStartHour + BrokerUTCOffset) * 60 + SessionStartMinute;
-   int endMinutes     = (SessionEndHour + BrokerUTCOffset) * 60 + SessionEndMinute;
+   // UK is UTC+0 (GMT) in winter, UTC+1 (BST) in summer
+   // Session inputs are in UK local time
+   // To convert UK local → UTC: subtract ukOffset
+   // To convert UTC → server: add BrokerUTCOffset
+   int ukOffset = UKSummerTime ? 1 : 0;
+   int startMinutes = (SessionStartHour - ukOffset + BrokerUTCOffset) * 60 + SessionStartMinute;
+   int endMinutes   = (SessionEndHour - ukOffset + BrokerUTCOffset) * 60 + SessionEndMinute;
 
-   // Handle wrap-around past midnight (e.g. offset pushes end past 24:00)
+   // Handle wrap-around past midnight
+   if(startMinutes < 0) startMinutes += 24 * 60;
+   if(endMinutes < 0)   endMinutes += 24 * 60;
    startMinutes = startMinutes % (24 * 60);
    endMinutes   = endMinutes % (24 * 60);
 
    if(startMinutes < endMinutes)
       return (currentMinutes >= startMinutes && currentMinutes < endMinutes);
    else
-      // Wraps past midnight
       return (currentMinutes >= startMinutes || currentMinutes < endMinutes);
 }
 
@@ -273,7 +375,7 @@ bool IsTradingDay()
       case 3: return TradeWednesday;
       case 4: return TradeThursday;
       case 5: return TradeFriday;
-      default: return false; // Weekend
+      default: return false;
    }
 }
 
@@ -285,7 +387,6 @@ int CountTradesToday()
    int count = 0;
    datetime todayStart = StringToTime(TimeToString(TimeCurrent(), TIME_DATE));
 
-   // Check open orders
    for(int i = OrdersTotal() - 1; i >= 0; i--)
    {
       if(OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
@@ -298,7 +399,6 @@ int CountTradesToday()
       }
    }
 
-   // Check closed orders in history
    for(int i = OrdersHistoryTotal() - 1; i >= 0; i--)
    {
       if(OrderSelect(i, SELECT_BY_POS, MODE_HISTORY))
@@ -337,12 +437,10 @@ double GetADR()
 //+------------------------------------------------------------------+
 bool CheckDailyDrawdown()
 {
-   // Calculate today's total P&L (closed + floating)
    double closedPL   = 0;
    double floatingPL = 0;
    datetime todayStart = StringToTime(TimeToString(TimeCurrent(), TIME_DATE));
 
-   // Closed P&L today
    for(int i = OrdersHistoryTotal() - 1; i >= 0; i--)
    {
       if(OrderSelect(i, SELECT_BY_POS, MODE_HISTORY))
@@ -355,7 +453,6 @@ bool CheckDailyDrawdown()
       }
    }
 
-   // Floating P&L
    for(int i = OrdersTotal() - 1; i >= 0; i--)
    {
       if(OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
@@ -413,97 +510,125 @@ bool HasOpenTrade()
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| Check all BUY conditions                                          |
+//| Check BUY signal with diagnostic logging                          |
+//| Returns: 1 = signal found, 0 = no signal                         |
 //+------------------------------------------------------------------+
-bool CheckBuySignal()
+int CheckBuySignalDiag()
 {
    // 1. M15 trend: price above 200 EMA
    double ema200_m15 = iMA(Symbol(), PERIOD_M15, 200, 0, MODE_EMA, PRICE_CLOSE, 0);
-   if(iClose(Symbol(), PERIOD_M15, 0) <= ema200_m15)
-      return false;
+   double m15Close = iClose(Symbol(), PERIOD_M15, 0);
+   bool trendOK = (m15Close > ema200_m15);
 
    // 2. EMA slope must be positive (uptrend)
-   if(GetEMA200Slope() <= 0)
-      return false;
+   double slope = GetEMA200Slope();
+   bool slopeOK = (slope > 0);
 
    // 3. M5 pullback: price touched or pierced the 20 EMA
    double ema20_m5 = iMA(Symbol(), PERIOD_M5, 20, 0, MODE_EMA, PRICE_CLOSE, 1);
    double low1 = iLow(Symbol(), PERIOD_M5, 1);
-   if(low1 > ema20_m5 + 1.0 * g_pipSize)  // Must touch or pierce
-      return false;
+   bool pullbackOK = (low1 <= ema20_m5 + 1.0 * g_pipSize);
 
-   // 4. RSI confirmation: standard turn OR divergence
-   if(!CheckRSIBuyCondition())
-      return false;
+   // 4. RSI confirmation
+   bool rsiOK = CheckRSIBuyCondition();
 
-   // 5. Candle pattern: bullish close, optionally require strong pattern
+   // 5. Candle pattern
    double close1 = iClose(Symbol(), PERIOD_M5, 1);
    double open1  = iOpen(Symbol(), PERIOD_M5, 1);
-   if(close1 <= open1)  // Must be bullish
-      return false;
+   bool bullishOK = (close1 > open1);
+   bool patternOK = true;
+   if(RequireStrongCandle && bullishOK)
+      patternOK = IsBullishEngulfingOrPinBar();
 
-   if(RequireStrongCandle)
-   {
-      if(!IsBullishEngulfingOrPinBar())
-         return false;
-   }
-
-   // 6. HTF alignment (optional)
+   // 6. HTF alignment
+   bool htfOK = true;
+   double htfEMA = 0;
    if(UseHTFAlignment)
    {
-      double htfEMA = iMA(Symbol(), HTFPeriod, 50, 0, MODE_EMA, PRICE_CLOSE, 0);
-      if(Ask <= htfEMA)
-         return false;
+      htfEMA = iMA(Symbol(), HTFPeriod, 50, 0, MODE_EMA, PRICE_CLOSE, 0);
+      htfOK = (Ask > htfEMA);
    }
 
-   return true;
+   bool allPass = trendOK && slopeOK && pullbackOK && rsiOK && bullishOK && patternOK && htfOK;
+
+   if(EnableDiagnostics)
+   {
+      string msg = "[BUY] ";
+      msg += "M15trend:" + (trendOK ? "OK" : "FAIL(price " + DoubleToString(m15Close, Digits) + " vs EMA " + DoubleToString(ema200_m15, Digits) + ")") + " | ";
+      msg += "Slope:" + (slopeOK ? "OK(+" + DoubleToString(slope/Point, 1) + "pt)" : "FAIL(neg)") + " | ";
+      msg += "Pullback:" + (pullbackOK ? "OK" : "FAIL(low " + DoubleToString(low1, Digits) + " > EMA+" + DoubleToString(ema20_m5 + g_pipSize, Digits) + ")") + " | ";
+      msg += "RSI:" + (rsiOK ? "OK" : "FAIL") + " | ";
+      msg += "Bullish:" + (bullishOK ? "OK" : "FAIL") + " | ";
+      msg += "Pattern:" + (patternOK ? "OK" : "FAIL(no engulf/pin)") + " | ";
+      if(UseHTFAlignment)
+         msg += "H4:" + (htfOK ? "OK" : "FAIL(Ask<EMA " + DoubleToString(htfEMA, Digits) + ")");
+      if(allPass)
+         msg += " >>> BUY SIGNAL";
+      Print(msg);
+   }
+
+   return allPass ? 1 : 0;
 }
 
 //+------------------------------------------------------------------+
-//| Check all SELL conditions                                         |
+//| Check SELL signal with diagnostic logging                         |
+//| Returns: 1 = signal found, 0 = no signal                         |
 //+------------------------------------------------------------------+
-bool CheckSellSignal()
+int CheckSellSignalDiag()
 {
    // 1. M15 trend: price below 200 EMA
    double ema200_m15 = iMA(Symbol(), PERIOD_M15, 200, 0, MODE_EMA, PRICE_CLOSE, 0);
-   if(iClose(Symbol(), PERIOD_M15, 0) >= ema200_m15)
-      return false;
+   double m15Close = iClose(Symbol(), PERIOD_M15, 0);
+   bool trendOK = (m15Close < ema200_m15);
 
    // 2. EMA slope must be negative (downtrend)
-   if(GetEMA200Slope() >= 0)
-      return false;
+   double slope = GetEMA200Slope();
+   bool slopeOK = (slope < 0);
 
    // 3. M5 pullback: price touched or pierced the 20 EMA
    double ema20_m5 = iMA(Symbol(), PERIOD_M5, 20, 0, MODE_EMA, PRICE_CLOSE, 1);
    double high1 = iHigh(Symbol(), PERIOD_M5, 1);
-   if(high1 < ema20_m5 - 1.0 * g_pipSize)  // Must touch or pierce
-      return false;
+   bool pullbackOK = (high1 >= ema20_m5 - 1.0 * g_pipSize);
 
-   // 4. RSI confirmation: standard turn OR divergence
-   if(!CheckRSISellCondition())
-      return false;
+   // 4. RSI confirmation
+   bool rsiOK = CheckRSISellCondition();
 
-   // 5. Candle pattern: bearish close, optionally require strong pattern
+   // 5. Candle pattern
    double close1 = iClose(Symbol(), PERIOD_M5, 1);
    double open1  = iOpen(Symbol(), PERIOD_M5, 1);
-   if(close1 >= open1)  // Must be bearish
-      return false;
+   bool bearishOK = (close1 < open1);
+   bool patternOK = true;
+   if(RequireStrongCandle && bearishOK)
+      patternOK = IsBearishEngulfingOrPinBar();
 
-   if(RequireStrongCandle)
-   {
-      if(!IsBearishEngulfingOrPinBar())
-         return false;
-   }
-
-   // 6. HTF alignment (optional)
+   // 6. HTF alignment
+   bool htfOK = true;
+   double htfEMA = 0;
    if(UseHTFAlignment)
    {
-      double htfEMA = iMA(Symbol(), HTFPeriod, 50, 0, MODE_EMA, PRICE_CLOSE, 0);
-      if(Bid >= htfEMA)
-         return false;
+      htfEMA = iMA(Symbol(), HTFPeriod, 50, 0, MODE_EMA, PRICE_CLOSE, 0);
+      htfOK = (Bid < htfEMA);
    }
 
-   return true;
+   bool allPass = trendOK && slopeOK && pullbackOK && rsiOK && bearishOK && patternOK && htfOK;
+
+   if(EnableDiagnostics)
+   {
+      string msg = "[SELL] ";
+      msg += "M15trend:" + (trendOK ? "OK" : "FAIL(price " + DoubleToString(m15Close, Digits) + " vs EMA " + DoubleToString(ema200_m15, Digits) + ")") + " | ";
+      msg += "Slope:" + (slopeOK ? "OK(" + DoubleToString(slope/Point, 1) + "pt)" : "FAIL(pos)") + " | ";
+      msg += "Pullback:" + (pullbackOK ? "OK" : "FAIL(high " + DoubleToString(high1, Digits) + " < EMA-" + DoubleToString(ema20_m5 - g_pipSize, Digits) + ")") + " | ";
+      msg += "RSI:" + (rsiOK ? "OK" : "FAIL") + " | ";
+      msg += "Bearish:" + (bearishOK ? "OK" : "FAIL") + " | ";
+      msg += "Pattern:" + (patternOK ? "OK" : "FAIL(no engulf/pin)") + " | ";
+      if(UseHTFAlignment)
+         msg += "H4:" + (htfOK ? "OK" : "FAIL(Bid>EMA " + DoubleToString(htfEMA, Digits) + ")");
+      if(allPass)
+         msg += " >>> SELL SIGNAL";
+      Print(msg);
+   }
+
+   return allPass ? 1 : 0;
 }
 
 //+------------------------------------------------------------------+
@@ -514,13 +639,11 @@ bool CheckRSIBuyCondition()
    double rsi1 = iRSI(Symbol(), PERIOD_M5, 14, PRICE_CLOSE, 1);
    double rsi2 = iRSI(Symbol(), PERIOD_M5, 14, PRICE_CLOSE, 2);
 
-   // Standard condition: RSI was below 40 and turned up
    bool standardTurn = (rsi2 < 40.0 && rsi1 > rsi2);
 
    if(standardTurn)
       return true;
 
-   // RSI divergence: price made lower low but RSI made higher low
    if(UseRSIDivergence)
       return CheckBullishRSIDivergence();
 
@@ -535,13 +658,11 @@ bool CheckRSISellCondition()
    double rsi1 = iRSI(Symbol(), PERIOD_M5, 14, PRICE_CLOSE, 1);
    double rsi2 = iRSI(Symbol(), PERIOD_M5, 14, PRICE_CLOSE, 2);
 
-   // Standard condition: RSI was above 60 and turned down
    bool standardTurn = (rsi2 > 60.0 && rsi1 < rsi2);
 
    if(standardTurn)
       return true;
 
-   // RSI divergence: price made higher high but RSI made lower high
    if(UseRSIDivergence)
       return CheckBearishRSIDivergence();
 
@@ -555,24 +676,21 @@ bool CheckBullishRSIDivergence()
 {
    int lookback = 10;
 
-   // Find the most recent swing low in price (bar 1)
    double priceLow1 = iLow(Symbol(), PERIOD_M5, 1);
    double rsiLow1   = iRSI(Symbol(), PERIOD_M5, 14, PRICE_CLOSE, 1);
 
-   // Find a previous swing low within lookback
    for(int i = 3; i <= lookback; i++)
    {
       double priceLowI = iLow(Symbol(), PERIOD_M5, i);
       double rsiLowI   = iRSI(Symbol(), PERIOD_M5, 14, PRICE_CLOSE, i);
 
-      // Check if bar i is a local low (lower than neighbors)
       if(priceLowI <= iLow(Symbol(), PERIOD_M5, i-1) &&
          priceLowI <= iLow(Symbol(), PERIOD_M5, i+1))
       {
-         // Bullish divergence: price made lower low, RSI made higher low
          if(priceLow1 < priceLowI && rsiLow1 > rsiLowI)
          {
-            Print("Bullish RSI divergence detected at bar ", i);
+            if(EnableDiagnostics)
+               Print("Bullish RSI divergence detected at bar ", i);
             return true;
          }
       }
@@ -599,10 +717,10 @@ bool CheckBearishRSIDivergence()
       if(priceHighI >= iHigh(Symbol(), PERIOD_M5, i-1) &&
          priceHighI >= iHigh(Symbol(), PERIOD_M5, i+1))
       {
-         // Bearish divergence: price made higher high, RSI made lower high
          if(priceHigh1 > priceHighI && rsiHigh1 < rsiHighI)
          {
-            Print("Bearish RSI divergence detected at bar ", i);
+            if(EnableDiagnostics)
+               Print("Bearish RSI divergence detected at bar ", i);
             return true;
          }
       }
@@ -624,19 +742,18 @@ bool IsBullishEngulfingOrPinBar()
    double close2 = iClose(Symbol(), PERIOD_M5, 2);
 
    double body1 = MathAbs(close1 - open1);
-   double body2 = MathAbs(close2 - open2);
 
    // Engulfing: current bullish body fully engulfs previous bearish body
-   bool engulfing = (close2 < open2) &&                    // Previous was bearish
-                    (close1 > open1) &&                     // Current is bullish
-                    (close1 > open2) && (open1 < close2);   // Body engulfs
+   bool engulfing = (close2 < open2) &&
+                    (close1 > open1) &&
+                    (close1 > open2) && (open1 < close2);
 
    // Pin bar: long lower wick (rejection), wick >= 2x body
    double lowerWick = MathMin(open1, close1) - low1;
    double upperWick = high1 - MathMax(open1, close1);
-   bool pinBar = (close1 > open1) &&                       // Bullish
-                 (lowerWick >= 2.0 * body1) &&             // Long lower wick
-                 (upperWick < body1);                       // Short upper wick
+   bool pinBar = (close1 > open1) &&
+                 (lowerWick >= 2.0 * body1) &&
+                 (upperWick < body1);
 
    return (engulfing || pinBar);
 }
@@ -654,19 +771,18 @@ bool IsBearishEngulfingOrPinBar()
    double close2 = iClose(Symbol(), PERIOD_M5, 2);
 
    double body1 = MathAbs(close1 - open1);
-   double body2 = MathAbs(close2 - open2);
 
    // Engulfing: current bearish body fully engulfs previous bullish body
-   bool engulfing = (close2 > open2) &&                    // Previous was bullish
-                    (close1 < open1) &&                     // Current is bearish
-                    (open1 > close2) && (close1 < open2);   // Body engulfs
+   bool engulfing = (close2 > open2) &&
+                    (close1 < open1) &&
+                    (open1 > close2) && (close1 < open2);
 
    // Pin bar: long upper wick (rejection), wick >= 2x body
    double upperWick = high1 - MathMax(open1, close1);
    double lowerWick = MathMin(open1, close1) - low1;
-   bool pinBar = (close1 < open1) &&                       // Bearish
-                 (upperWick >= 2.0 * body1) &&             // Long upper wick
-                 (lowerWick < body1);                       // Short lower wick
+   bool pinBar = (close1 < open1) &&
+                 (upperWick >= 2.0 * body1) &&
+                 (lowerWick < body1);
 
    return (engulfing || pinBar);
 }
@@ -676,7 +792,7 @@ bool IsBearishEngulfingOrPinBar()
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| Calculate stop loss distance in pips for a BUY                    |
+//| Calculate stop loss price for a BUY                               |
 //+------------------------------------------------------------------+
 double CalculateBuyStopLoss()
 {
@@ -684,18 +800,15 @@ double CalculateBuyStopLoss()
 
    if(UseATRStopLoss)
    {
-      // ATR-based SL
       double atr = iATR(Symbol(), PERIOD_M5, ATRPeriod, 1);
       double atrSL = Ask - atr * ATRMultiplier;
 
-      // Check swing low — use whichever gives more room
       double swingLow = FindSwingLow(10);
       if(swingLow > 0)
       {
-         double swingSL = swingLow - 1.0 * g_pipSize; // Buffer below swing
-         slPrice = MathMin(atrSL, swingSL);            // Use the wider (lower) SL
+         double swingSL = swingLow - 1.0 * g_pipSize;
+         slPrice = MathMin(atrSL, swingSL);
 
-         // Cap at 2x ATR to prevent absurd stops
          double maxSL = Ask - atr * ATRMultiplier * 2.0;
          if(slPrice < maxSL)
             slPrice = maxSL;
@@ -707,10 +820,8 @@ double CalculateBuyStopLoss()
    }
    else
    {
-      // Fixed pip fallback
       slPrice = Ask - FixedStopLossPips * g_pipSize;
 
-      // Still check swing low
       double swingLow = FindSwingLow(10);
       if(swingLow > 0)
       {
@@ -723,7 +834,7 @@ double CalculateBuyStopLoss()
 }
 
 //+------------------------------------------------------------------+
-//| Calculate stop loss distance in pips for a SELL                   |
+//| Calculate stop loss price for a SELL                              |
 //+------------------------------------------------------------------+
 double CalculateSellStopLoss()
 {
@@ -738,7 +849,7 @@ double CalculateSellStopLoss()
       if(swingHigh > 0)
       {
          double swingSL = swingHigh + 1.0 * g_pipSize;
-         slPrice = MathMax(atrSL, swingSL);  // Use the wider (higher) SL
+         slPrice = MathMax(atrSL, swingSL);
 
          double maxSL = Bid + atr * ATRMultiplier * 2.0;
          if(slPrice > maxSL)
@@ -777,7 +888,6 @@ double FindSwingLow(int lookback)
       double low_l  = iLow(Symbol(), PERIOD_M5, i - 1);
       double low_r  = iLow(Symbol(), PERIOD_M5, i + 1);
 
-      // Simple fractal: lower than both neighbors
       if(low_i <= low_l && low_i <= low_r)
       {
          if(lowestSwing == 0 || low_i < lowestSwing)
@@ -830,10 +940,6 @@ double CalculateLotSize(double slDistancePips)
    if(tickValue <= 0 || tickSize <= 0)
       return MarketInfo(Symbol(), MODE_MINLOT);
 
-   // Convert SL pips to price distance
-   double slDistance = slDistancePips * g_pipSize;
-
-   // Calculate pip value per lot
    double pipValuePerLot = tickValue * (g_pipSize / tickSize);
 
    if(pipValuePerLot <= 0)
@@ -855,10 +961,8 @@ double NormalizeLots(double lots)
 
    if(lotStep <= 0) lotStep = 0.01;
 
-   // Round to lot step
    lots = MathFloor(lots / lotStep) * lotStep;
 
-   // Clamp to min/max
    if(lots < minLot) lots = minLot;
    if(lots > maxLot) lots = maxLot;
 
@@ -874,6 +978,8 @@ double NormalizeLots(double lots)
 //+------------------------------------------------------------------+
 void ExecuteBuy()
 {
+   RefreshRates();  // Bug 3 fix: ensure fresh prices
+
    double slPrice = CalculateBuyStopLoss();
    double slDistancePips = (Ask - slPrice) / g_pipSize;
 
@@ -912,6 +1018,9 @@ void ExecuteBuy()
       Print("BUY opened. Ticket: ", ticket, " Lots: ", lots,
             " SL: ", slPrice, " TP: ", tpPrice,
             " SL pips: ", DoubleToString(slDistancePips, 1));
+
+      // Store original SL distance for trailing stop (Bug 2 fix)
+      StoreSLDistance(ticket, Ask - slPrice);
    }
 }
 
@@ -920,6 +1029,8 @@ void ExecuteBuy()
 //+------------------------------------------------------------------+
 void ExecuteSell()
 {
+   RefreshRates();  // Bug 3 fix: ensure fresh prices
+
    double slPrice = CalculateSellStopLoss();
    double slDistancePips = (slPrice - Bid) / g_pipSize;
 
@@ -958,6 +1069,9 @@ void ExecuteSell()
       Print("SELL opened. Ticket: ", ticket, " Lots: ", lots,
             " SL: ", slPrice, " TP: ", tpPrice,
             " SL pips: ", DoubleToString(slDistancePips, 1));
+
+      // Store original SL distance for trailing stop (Bug 2 fix)
+      StoreSLDistance(ticket, slPrice - Bid);
    }
 }
 
@@ -1007,6 +1121,95 @@ string ErrorDescription(int errorCode)
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
+//| Store original SL distance when trade opens (Bug 2 fix)           |
+//+------------------------------------------------------------------+
+void StoreSLDistance(int ticket, double distance)
+{
+   if(g_slCount < 100)
+   {
+      g_slTickets[g_slCount]   = ticket;
+      g_slDistances[g_slCount] = distance;
+      g_slCount++;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Get stored original SL distance for a ticket (Bug 2 fix)          |
+//| Also checks the parent ticket for partially-closed orders         |
+//+------------------------------------------------------------------+
+double GetStoredSLDistance(int ticket)
+{
+   // Direct match
+   for(int i = 0; i < g_slCount; i++)
+   {
+      if(g_slTickets[i] == ticket)
+         return g_slDistances[i];
+   }
+
+   // After partial close, MT4 creates a new ticket. Try to find via comment
+   // "from #XXXXX" pattern — extract parent ticket
+   if(OrderSelect(ticket, SELECT_BY_TICKET))
+   {
+      string comment = OrderComment();
+      int fromPos = StringFind(comment, "from #");
+      if(fromPos >= 0)
+      {
+         string parentStr = StringSubstr(comment, fromPos + 6);
+         int parentTicket = (int)StringToInteger(parentStr);
+         if(parentTicket > 0)
+         {
+            for(int i = 0; i < g_slCount; i++)
+            {
+               if(g_slTickets[i] == parentTicket)
+               {
+                  // Cache this mapping for future lookups
+                  StoreSLDistance(ticket, g_slDistances[i]);
+                  return g_slDistances[i];
+               }
+            }
+         }
+      }
+   }
+
+   return 0;
+}
+
+//+------------------------------------------------------------------+
+//| Check if a ticket has been partially closed (Bug 1 fix)           |
+//+------------------------------------------------------------------+
+bool IsPartialDone(int ticket)
+{
+   for(int i = 0; i < g_partialCount; i++)
+   {
+      if(g_partialTickets[i] == ticket)
+         return true;
+   }
+
+   // Also check if this is a child of a partially-closed order
+   // After partial close, the new order comment contains "from #XXXXX"
+   if(OrderSelect(ticket, SELECT_BY_TICKET))
+   {
+      string comment = OrderComment();
+      if(StringFind(comment, "from #") >= 0)
+         return true;  // This IS the remainder from a partial close
+   }
+
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| Mark a ticket as partially closed (Bug 1 fix)                     |
+//+------------------------------------------------------------------+
+void MarkPartialDone(int ticket)
+{
+   if(g_partialCount < 100)
+   {
+      g_partialTickets[g_partialCount] = ticket;
+      g_partialCount++;
+   }
+}
+
+//+------------------------------------------------------------------+
 //| Manage all open trades: partial close, break-even, trailing stop  |
 //+------------------------------------------------------------------+
 void ManageOpenTrades()
@@ -1022,45 +1225,46 @@ void ManageOpenTrades()
       if(OrderType() != OP_BUY && OrderType() != OP_SELL)
          continue;
 
+      int    ticket       = OrderTicket();
       double openPrice    = OrderOpenPrice();
       double currentSL    = OrderStopLoss();
-      double currentTP    = OrderTakeProfit();
       double slDistance    = 0;
       double currentProfit = 0;
-      bool   isPartialDone = (StringFind(OrderComment(), "P") >= 0);
+
+      // Use stored original SL distance if available (Bug 2 fix)
+      double origSLDist = GetStoredSLDistance(ticket);
 
       if(OrderType() == OP_BUY)
       {
-         slDistance    = (openPrice - currentSL);
+         slDistance    = (origSLDist > 0) ? origSLDist : (openPrice - currentSL);
          currentProfit = Bid - openPrice;
       }
-      else // SELL
+      else
       {
-         slDistance    = (currentSL - openPrice);
+         slDistance    = (origSLDist > 0) ? origSLDist : (currentSL - openPrice);
          currentProfit = openPrice - Ask;
       }
 
-      // Avoid division by zero
       if(slDistance <= 0) continue;
 
       double profitInR = currentProfit / slDistance;
 
-      // 1. Partial close at 1R
-      if(EnablePartialClose && !isPartialDone && profitInR >= 1.0)
+      // 1. Partial close at 1R (Bug 1 fix: use global tracker instead of comment)
+      if(EnablePartialClose && !IsPartialDone(ticket) && profitInR >= 1.0)
       {
-         HandlePartialClose(OrderTicket(), OrderType(), OrderLots());
+         HandlePartialClose(ticket, OrderType(), OrderLots());
       }
 
       // 2. Break-even at 1R
       if(EnableBreakEven && profitInR >= 1.0)
       {
-         HandleBreakEven(OrderTicket(), OrderType(), openPrice, currentSL);
+         HandleBreakEven(ticket, OrderType(), openPrice, currentSL);
       }
 
-      // 3. Trailing stop after 1R
+      // 3. Trailing stop after 1R (Bug 2 fix: pass original SL distance)
       if(EnableTrailingStop && profitInR >= 1.0)
       {
-         HandleTrailingStop(OrderTicket(), OrderType(), openPrice, currentSL);
+         HandleTrailingStop(ticket, OrderType(), openPrice, currentSL, origSLDist);
       }
    }
 }
@@ -1072,11 +1276,9 @@ void HandlePartialClose(int ticket, int orderType, double lots)
 {
    double closeLots = NormalizeLots(lots * PartialClosePercent / 100.0);
 
-   // Ensure we don't close more than we have
    if(closeLots >= lots)
       return;
 
-   // Ensure remaining lots are valid
    double remainingLots = NormalizeLots(lots - closeLots);
    if(remainingLots < MarketInfo(Symbol(), MODE_MINLOT))
       return;
@@ -1088,25 +1290,8 @@ void HandlePartialClose(int ticket, int orderType, double lots)
    if(result)
    {
       Print("Partial close executed. Ticket: ", ticket, " Closed: ", closeLots, " lots");
-
-      // Mark remaining order with "P" comment to prevent repeated partial closes
-      // After partial close, the remaining position gets a new ticket
-      // Find it and modify the comment
-      for(int i = OrdersTotal() - 1; i >= 0; i--)
-      {
-         if(OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
-         {
-            if(OrderSymbol() == Symbol() && OrderMagicNumber() == MagicNumber)
-            {
-               if(StringFind(OrderComment(), "P") < 0)
-               {
-                  // We can't change comments via OrderModify, but the partial close
-                  // tracking works via lot size comparison. Mark via SL movement instead.
-                  // The break-even handler will handle the SL move.
-               }
-            }
-         }
-      }
+      // Bug 1 fix: mark this ticket as partially closed using global tracker
+      MarkPartialDone(ticket);
    }
    else
    {
@@ -1125,14 +1310,12 @@ void HandleBreakEven(int ticket, int orderType, double openPrice, double current
    if(orderType == OP_BUY)
    {
       newSL = NormalizeDouble(openPrice + 1.0 * g_pipSize, Digits);
-      // Only move SL up, never down
       if(currentSL >= newSL)
          return;
    }
-   else // SELL
+   else
    {
       newSL = NormalizeDouble(openPrice - 1.0 * g_pipSize, Digits);
-      // Only move SL down, never up
       if(currentSL > 0 && currentSL <= newSL)
          return;
    }
@@ -1149,15 +1332,17 @@ void HandleBreakEven(int ticket, int orderType, double openPrice, double current
    else
    {
       int err = GetLastError();
-      if(err != 1) // Suppress "no error" spam
+      if(err != 1)
          Print("Break-even modify failed. Error: ", err, " - ", ErrorDescription(err));
    }
 }
 
 //+------------------------------------------------------------------+
-//| Trail stop loss after 1R profit using ATR or fixed distance       |
+//| Trail stop loss after 1R profit                                   |
+//| Bug 2 fix: uses original SL distance, not current (which may be   |
+//| break-even and thus ~1 pip)                                       |
 //+------------------------------------------------------------------+
-void HandleTrailingStop(int ticket, int orderType, double openPrice, double currentSL)
+void HandleTrailingStop(int ticket, int orderType, double openPrice, double currentSL, double origSLDist)
 {
    double trailDistance;
 
@@ -1168,8 +1353,11 @@ void HandleTrailingStop(int ticket, int orderType, double openPrice, double curr
    }
    else
    {
-      // Use original SL distance as trailing distance
-      trailDistance = MathAbs(openPrice - currentSL);
+      // Bug 2 fix: use ORIGINAL SL distance, not current (which is BE after break-even)
+      if(origSLDist > 0)
+         trailDistance = origSLDist;
+      else
+         trailDistance = MathAbs(openPrice - currentSL);  // Fallback
    }
 
    if(trailDistance <= 0)
@@ -1180,20 +1368,16 @@ void HandleTrailingStop(int ticket, int orderType, double openPrice, double curr
    if(orderType == OP_BUY)
    {
       newSL = NormalizeDouble(Bid - trailDistance, Digits);
-      // Only move SL up
       if(newSL <= currentSL)
          return;
-      // Don't trail below entry
       if(newSL < openPrice)
          return;
    }
-   else // SELL
+   else
    {
       newSL = NormalizeDouble(Ask + trailDistance, Digits);
-      // Only move SL down
       if(currentSL > 0 && newSL >= currentSL)
          return;
-      // Don't trail above entry
       if(newSL > openPrice)
          return;
    }
@@ -1213,6 +1397,32 @@ void HandleTrailingStop(int ticket, int orderType, double openPrice, double curr
       if(err != 1)
          Print("Trailing stop modify failed. Error: ", err, " - ", ErrorDescription(err));
    }
+}
+
+//+------------------------------------------------------------------+
+//| On-chart display — shows live EA status                           |
+//+------------------------------------------------------------------+
+void UpdateChartDisplay()
+{
+   double spreadPips = (Ask - Bid) / g_pipSize;
+   double adr = GetADR();
+   double slope = GetEMA200Slope();
+   double rsi = iRSI(Symbol(), PERIOD_M5, 14, PRICE_CLOSE, 0);
+   bool inSession = IsWithinSession();
+   int tradesToday = CountTradesToday();
+
+   string display = "";
+   display += "=== LTS Edge v1.1 ===\n";
+   display += "Status: " + (inSession ? "SESSION ACTIVE" : "Outside session") + "\n";
+   display += "Spread: " + DoubleToString(spreadPips, 1) + " pips" + (spreadPips <= MaxSpreadPips ? " OK" : " HIGH") + "\n";
+   display += "RSI(14): " + DoubleToString(rsi, 1) + "\n";
+   display += "ADR: " + DoubleToString(adr, 0) + " pips\n";
+   display += "EMA Slope: " + DoubleToString(MathAbs(slope)/Point, 1) + " pts (min " + DoubleToString(MinEMASlopePoints, 1) + ")\n";
+   display += "Trades today: " + IntegerToString(tradesToday) + "/" + IntegerToString(MaxTradesPerDay) + "\n";
+   display += "Session bars: " + IntegerToString(g_sessionBarsChecked) + " | Filters OK: " + IntegerToString(g_sessionFiltersPassed) + " | Signals: " + IntegerToString(g_sessionSignalsFound) + "\n";
+   display += "BST: " + (UKSummerTime ? "ON" : "OFF") + " | Offset: UTC+" + IntegerToString(BrokerUTCOffset) + "\n";
+
+   Comment(display);
 }
 
 //+------------------------------------------------------------------+
