@@ -931,7 +931,7 @@ double FindSwingHigh(int lookback)
 double CalculateLotSize(double slDistancePips)
 {
    double minLot = MarketInfo(Symbol(), MODE_MINLOT);
-   if(minLot <= 0) minLot = 0.01;
+   if(minLot <= 0 || minLot > 100) minLot = 0.01;
 
    if(slDistancePips <= 0)
       return minLot;
@@ -982,10 +982,10 @@ double NormalizeLots(double lots)
    double maxLot  = MarketInfo(Symbol(), MODE_MAXLOT);
    double lotStep = MarketInfo(Symbol(), MODE_LOTSTEP);
 
-   // Fallback defaults if MarketInfo returns 0 (common in backtester)
-   if(minLot  <= 0) minLot  = 0.01;
-   if(maxLot  <= 0) maxLot  = 100.0;
-   if(lotStep <= 0) lotStep = 0.01;
+   // Fallback/sanity defaults for backtester (MarketInfo can return 0 or 9999999)
+   if(minLot  <= 0 || minLot  > 100) minLot  = 0.01;
+   if(maxLot  <= 0 || maxLot  > 1000) maxLot  = 100.0;
+   if(lotStep <= 0 || lotStep > 100) lotStep = 0.01;
 
    // Hard cap: never risk more than 10 standard lots regardless of broker max
    if(maxLot > 10.0) maxLot = 10.0;
