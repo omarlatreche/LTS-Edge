@@ -6,7 +6,7 @@
 //+------------------------------------------------------------------+
 #property copyright "LTS Edge v1"
 #property link      ""
-#property version   "1.10"
+#property version   "1.20"
 #property strict
 
 //+------------------------------------------------------------------+
@@ -34,7 +34,7 @@ input double   ATRTrailingMultiplier  = 1.5;     // ATR multiplier for trailing 
 
 // --- Filters ---
 input double   MaxSpreadPips          = 2.0;     // Max allowed spread (pips)
-input double   MinCandleSizePips      = 5.0;     // Min candle size to avoid low-vol entries
+input double   MinCandleSizePips      = 3.0;     // Min candle size to avoid low-vol entries
 input double   MinADRPips             = 40.0;    // Min Average Daily Range (pips)
 input double   MaxADRPips             = 200.0;   // Max Average Daily Range (pips)
 
@@ -57,8 +57,8 @@ input bool     TradeFriday            = false;   // Allow trades on Friday
 input bool     UseHTFAlignment        = true;    // Require H4 trend alignment
 input int      HTFPeriod              = PERIOD_H4;// Higher timeframe for alignment
 input bool     UseRSIDivergence       = true;    // Allow RSI divergence as entry signal
-input bool     RequireStrongCandle    = true;     // Require engulfing or pin bar pattern
-input double   MinEMASlopePoints      = 10.0;    // Min 200 EMA slope over 5 bars (points)
+input bool     RequireStrongCandle    = false;    // Require engulfing or pin bar pattern
+input double   MinEMASlopePoints      = 5.0;     // Min 200 EMA slope over 5 bars (points)
 
 // --- Trade Limits ---
 input int      MaxTradesPerDay        = 3;       // Max trades per day
@@ -930,24 +930,39 @@ double FindSwingHigh(int lookback)
 //+------------------------------------------------------------------+
 double CalculateLotSize(double slDistancePips)
 {
+   double minLot = MarketInfo(Symbol(), MODE_MINLOT);
+
    if(slDistancePips <= 0)
-      return MarketInfo(Symbol(), MODE_MINLOT);
+      return minLot;
 
    double accountRisk = AccountBalance() * RiskPercent / 100.0;
    double tickValue   = MarketInfo(Symbol(), MODE_TICKVALUE);
    double tickSize    = MarketInfo(Symbol(), MODE_TICKSIZE);
 
    if(tickValue <= 0 || tickSize <= 0)
-      return MarketInfo(Symbol(), MODE_MINLOT);
+      return minLot;
 
    double pipValuePerLot = tickValue * (g_pipSize / tickSize);
 
    if(pipValuePerLot <= 0)
-      return MarketInfo(Symbol(), MODE_MINLOT);
+      return minLot;
 
    double lots = accountRisk / (slDistancePips * pipValuePerLot);
 
-   return NormalizeLots(lots);
+   lots = NormalizeLots(lots);
+
+   // Margin safety check — reduce lots until we can afford the trade
+   int maxAttempts = 10;
+   while(maxAttempts > 0 && lots > minLot)
+   {
+      double marginRequired = AccountFreeMarginCheck(Symbol(), OP_BUY, lots);
+      if(marginRequired > 0)
+         break;
+      lots = NormalizeLots(lots * 0.5);
+      maxAttempts--;
+   }
+
+   return lots;
 }
 
 //+------------------------------------------------------------------+
@@ -960,6 +975,9 @@ double NormalizeLots(double lots)
    double lotStep = MarketInfo(Symbol(), MODE_LOTSTEP);
 
    if(lotStep <= 0) lotStep = 0.01;
+
+   // Hard cap: never risk more than 10 standard lots regardless of broker max
+   if(maxLot > 10.0) maxLot = 10.0;
 
    lots = MathFloor(lots / lotStep) * lotStep;
 
