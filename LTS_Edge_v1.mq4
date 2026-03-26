@@ -949,13 +949,6 @@ double CalculateLotSize(double slDistancePips)
 
    double lots = accountRisk / (slDistancePips * pipValuePerLot);
 
-   Print("LotCalc: risk=", DoubleToString(accountRisk, 2),
-         " slPips=", DoubleToString(slDistancePips, 1),
-         " pipVal=", DoubleToString(pipValuePerLot, 4),
-         " rawLots=", DoubleToString(lots, 4),
-         " minLot=", DoubleToString(MarketInfo(Symbol(), MODE_MINLOT), 4),
-         " maxLot=", DoubleToString(MarketInfo(Symbol(), MODE_MAXLOT), 2));
-
    lots = NormalizeLots(lots);
 
    // Margin safety check — reduce lots until we can afford the trade
@@ -968,6 +961,11 @@ double CalculateLotSize(double slDistancePips)
       lots = NormalizeLots(lots * 0.5);
       maxAttempts--;
    }
+
+   Print("LotCalc v1.3: risk=", DoubleToString(accountRisk, 2),
+         " slPips=", DoubleToString(slDistancePips, 1),
+         " pipVal=", DoubleToString(pipValuePerLot, 4),
+         " finalLots=", DoubleToString(lots, 2));
 
    return lots;
 }
