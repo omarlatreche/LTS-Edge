@@ -2,11 +2,11 @@
 //|                                                  LTS_Edge_v1.mq4 |
 //|                        Trend-Following Pullback EA with Filters   |
 //|                        Dual-timeframe: M15 trend + M5 entry       |
-//|                        v1.3 — Hardcoded lot sizing for backtester   |
+//|                        v1.4 — Fix trailing stop + Error 4108        |
 //+------------------------------------------------------------------+
 #property copyright "LTS Edge v1"
 #property link      ""
-#property version   "1.30"
+#property version   "1.40"
 #property strict
 
 //+------------------------------------------------------------------+
@@ -28,7 +28,7 @@ input double   FixedStopLossPips      = 15.0;    // Fixed SL fallback (pips)
 input bool     EnablePartialClose     = true;    // Close partial position at 1R
 input int      PartialClosePercent    = 50;      // % of position to close at 1R
 input bool     EnableBreakEven        = true;    // Move SL to breakeven at 1R
-input bool     EnableTrailingStop     = true;    // Enable trailing stop after 1R
+input bool     EnableTrailingStop     = false;   // Enable trailing stop after 1R (disabled: let TP ride)
 input bool     UseATRTrailing         = true;    // Use ATR-based trailing distance
 input double   ATRTrailingMultiplier  = 1.5;     // ATR multiplier for trailing stop
 
@@ -125,7 +125,7 @@ int OnInit()
    serverStart = serverStart % 24;
    serverEnd   = serverEnd % 24;
 
-   Print("LTS Edge v1.3 initialized. Pip size: ", g_pipSize, " Digits: ", Digits);
+   Print("LTS Edge v1.4 initialized. Pip size: ", g_pipSize, " Digits: ", Digits);
    Print("Session: ", SessionStartHour, ":00-", SessionEndHour, ":00 UK",
          (UKSummerTime ? " (BST)" : " (GMT)"),
          " = ", serverStart, ":00-", serverEnd, ":00 server (UTC+", BrokerUTCOffset, ")");
@@ -142,7 +142,7 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    Comment("");  // Clear chart overlay
-   Print("LTS Edge v1.3 removed. Reason: ", reason);
+   Print("LTS Edge v1.4 removed. Reason: ", reason);
 }
 
 //+------------------------------------------------------------------+
@@ -962,7 +962,7 @@ double CalculateLotSize(double slDistancePips)
       maxAttempts--;
    }
 
-   Print("LotCalc v1.3: risk=", DoubleToString(accountRisk, 2),
+   Print("LotCalc v1.4: risk=", DoubleToString(accountRisk, 2),
          " slPips=", DoubleToString(slDistancePips, 1),
          " pipVal=", DoubleToString(pipValuePerLot, 4),
          " finalLots=", DoubleToString(lots, 2));
@@ -1270,9 +1270,11 @@ void ManageOpenTrades()
       double profitInR = currentProfit / slDistance;
 
       // 1. Partial close at 1R (Bug 1 fix: use global tracker instead of comment)
+      //    After partial close, old ticket is destroyed — skip BE/trailing this tick
       if(EnablePartialClose && !IsPartialDone(ticket) && profitInR >= 1.0)
       {
          HandlePartialClose(ticket, OrderType(), OrderLots());
+         continue;  // Fix Error 4108: old ticket gone, new one picked up next tick
       }
 
       // 2. Break-even at 1R
@@ -1281,10 +1283,16 @@ void ManageOpenTrades()
          HandleBreakEven(ticket, OrderType(), openPrice, currentSL);
       }
 
-      // 3. Trailing stop after 1R (Bug 2 fix: pass original SL distance)
+      // 3. Trailing stop after 1R — only update on new M5 bars, not every tick
       if(EnableTrailingStop && profitInR >= 1.0)
       {
-         HandleTrailingStop(ticket, OrderType(), openPrice, currentSL, origSLDist);
+         static datetime lastTrailBar = 0;
+         datetime currentBar = iTime(Symbol(), PERIOD_M5, 0);
+         if(currentBar != lastTrailBar)
+         {
+            HandleTrailingStop(ticket, OrderType(), openPrice, currentSL, origSLDist);
+            lastTrailBar = currentBar;
+         }
       }
    }
 }
@@ -1300,7 +1308,7 @@ void HandlePartialClose(int ticket, int orderType, double lots)
       return;
 
    double remainingLots = NormalizeLots(lots - closeLots);
-   if(remainingLots < MarketInfo(Symbol(), MODE_MINLOT))
+   if(remainingLots < 0.01)  // Hardcoded — MarketInfo returns 9999999 on some brokers
       return;
 
    double closePrice = (orderType == OP_BUY) ? Bid : Ask;
@@ -1432,7 +1440,7 @@ void UpdateChartDisplay()
    int tradesToday = CountTradesToday();
 
    string display = "";
-   display += "=== LTS Edge v1.3 ===\n";
+   display += "=== LTS Edge v1.4 ===\n";
    display += "Status: " + (inSession ? "SESSION ACTIVE" : "Outside session") + "\n";
    display += "Spread: " + DoubleToString(spreadPips, 1) + " pips" + (spreadPips <= MaxSpreadPips ? " OK" : " HIGH") + "\n";
    display += "RSI(14): " + DoubleToString(rsi, 1) + "\n";
