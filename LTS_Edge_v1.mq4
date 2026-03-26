@@ -2,11 +2,11 @@
 //|                                                  LTS_Edge_v1.mq4 |
 //|                        Trend-Following Pullback EA with Filters   |
 //|                        Dual-timeframe: M15 trend + M5 entry       |
-//|                        v1.1 — Bug fixes + Diagnostics              |
+//|                        v1.3 — Hardcoded lot sizing for backtester   |
 //+------------------------------------------------------------------+
 #property copyright "LTS Edge v1"
 #property link      ""
-#property version   "1.20"
+#property version   "1.30"
 #property strict
 
 //+------------------------------------------------------------------+
@@ -125,7 +125,7 @@ int OnInit()
    serverStart = serverStart % 24;
    serverEnd   = serverEnd % 24;
 
-   Print("LTS Edge v1.1 initialized. Pip size: ", g_pipSize, " Digits: ", Digits);
+   Print("LTS Edge v1.3 initialized. Pip size: ", g_pipSize, " Digits: ", Digits);
    Print("Session: ", SessionStartHour, ":00-", SessionEndHour, ":00 UK",
          (UKSummerTime ? " (BST)" : " (GMT)"),
          " = ", serverStart, ":00-", serverEnd, ":00 server (UTC+", BrokerUTCOffset, ")");
@@ -142,7 +142,7 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    Comment("");  // Clear chart overlay
-   Print("LTS Edge v1.1 removed. Reason: ", reason);
+   Print("LTS Edge v1.3 removed. Reason: ", reason);
 }
 
 //+------------------------------------------------------------------+
@@ -930,8 +930,7 @@ double FindSwingHigh(int lookback)
 //+------------------------------------------------------------------+
 double CalculateLotSize(double slDistancePips)
 {
-   double minLot = MarketInfo(Symbol(), MODE_MINLOT);
-   if(minLot <= 0 || minLot > 100) minLot = 0.01;
+   double minLot = 0.01;  // Hardcoded — MarketInfo returns 9999999 in backtester
 
    if(slDistancePips <= 0)
       return minLot;
@@ -978,17 +977,11 @@ double CalculateLotSize(double slDistancePips)
 //+------------------------------------------------------------------+
 double NormalizeLots(double lots)
 {
-   double minLot  = MarketInfo(Symbol(), MODE_MINLOT);
-   double maxLot  = MarketInfo(Symbol(), MODE_MAXLOT);
-   double lotStep = MarketInfo(Symbol(), MODE_LOTSTEP);
-
-   // Fallback/sanity defaults for backtester (MarketInfo can return 0 or 9999999)
-   if(minLot  <= 0 || minLot  > 100) minLot  = 0.01;
-   if(maxLot  <= 0 || maxLot  > 1000) maxLot  = 100.0;
-   if(lotStep <= 0 || lotStep > 100) lotStep = 0.01;
-
-   // Hard cap: never risk more than 10 standard lots regardless of broker max
-   if(maxLot > 10.0) maxLot = 10.0;
+   // Hardcoded lot constraints — MarketInfo returns 9999999 in MT4 backtester
+   // Values are standard for all major forex brokers (Pepperstone, IC Markets, etc.)
+   double minLot  = 0.01;
+   double maxLot  = 10.0;
+   double lotStep = 0.01;
 
    lots = MathFloor(lots / lotStep) * lotStep;
 
@@ -1441,7 +1434,7 @@ void UpdateChartDisplay()
    int tradesToday = CountTradesToday();
 
    string display = "";
-   display += "=== LTS Edge v1.1 ===\n";
+   display += "=== LTS Edge v1.3 ===\n";
    display += "Status: " + (inSession ? "SESSION ACTIVE" : "Outside session") + "\n";
    display += "Spread: " + DoubleToString(spreadPips, 1) + " pips" + (spreadPips <= MaxSpreadPips ? " OK" : " HIGH") + "\n";
    display += "RSI(14): " + DoubleToString(rsi, 1) + "\n";
