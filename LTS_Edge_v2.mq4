@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
-//|                                                  LTS_Edge_v1.mq4 |
-//|                        NY Session Breakout — XAUUSD Gold           |
-//|                        Trades the opening range breakout           |
-//|                        v3.1 — Optimized MaxRange for Gold          |
+//|                                                  LTS_Edge_v2.mq4 |
+//|                        London Session Breakout — GBPUSD / Forex    |
+//|                        Trades the Asian range breakout at London    |
+//|                        v4.0 — London Breakout Strategy             |
 //+------------------------------------------------------------------+
-#property copyright "LTS Edge v3.1"
+#property copyright "LTS Edge v4.0"
 #property link      ""
-#property version   "3.10"
+#property version   "4.00"
 #property strict
 
 //+------------------------------------------------------------------+
@@ -15,32 +15,34 @@
 
 // --- Risk Management ---
 input double   RiskPercent            = 1.0;     // Risk per trade (% of balance)
-input double   RiskRewardRatio        = 2.0;     // TP as multiple of range width
+input double   RiskRewardRatio        = 1.5;     // TP as multiple of SL distance
 input double   MaxDailyDrawdownPct    = 3.0;     // Max daily drawdown % — stop trading
 
-// --- Range Definition (UK time) ---
-input int      RangeStartHour         = 14;      // Range start hour (UK time)
-input int      RangeStartMinute       = 30;      // Range start minute (UK time)
-input int      RangeEndHour           = 15;      // Range end hour (UK time)
-input int      RangeEndMinute         = 0;       // Range end minute (UK time)
-input double   MinRangePips           = 3.0;     // Min range size in pips (XAUUSD: 3)
-input double   MaxRangePips           = 40.0;    // Max range size in pips (XAUUSD: 40)
-input double   BreakoutBufferPips     = 0.5;     // Pips beyond range for pending orders
+// --- Asian Range Definition (UK time) ---
+input int      RangeStartHour         = 0;       // Asian range start hour (UK time)
+input int      RangeStartMinute       = 0;       // Asian range start minute
+input int      RangeEndHour           = 7;       // Asian range end hour (UK time)
+input int      RangeEndMinute         = 0;       // Asian range end minute
+
+// --- Range Filters ---
+input double   MinRangePips           = 20.0;    // Min Asian range size (pips)
+input double   MaxRangePips           = 80.0;    // Max Asian range size (pips)
+input double   BreakoutBufferPips     = 2.0;     // Pips beyond range for entry
 
 // --- Session Management ---
-input int      CloseTradesHour        = 21;      // Close open trades at this hour (UK time)
-input int      CancelOrdersHour       = 18;      // Cancel unfilled pending orders (UK time)
+input int      CloseTradesHour        = 16;      // Close open trades at this hour (UK time)
+input int      CancelOrdersHour       = 10;      // Cancel unfilled pending orders (UK time)
 
 // --- Trend Filter ---
 input bool     UseTrendFilter         = true;    // Only trade breakout in trend direction
-input int      TrendEMAPeriod         = 200;     // EMA period for trend filter (D1)
+input int      TrendEMAPeriod         = 50;      // EMA period for trend filter
 input int      TrendFilterTF          = PERIOD_D1; // Timeframe for trend EMA
 
 // --- Bias ---
 input int      TradeBias              = 0;       // 0 = both directions, 1 = long only, -1 = short only
 
 // --- Filters ---
-input double   MaxSpreadPips          = 0.5;     // Max allowed spread (pips)
+input double   MaxSpreadPips          = 2.0;     // Max allowed spread (pips)
 
 // --- Time Settings ---
 input int      BrokerUTCOffset        = 3;       // Broker server UTC offset (IC Markets: 3, Pepperstone: 2)
@@ -57,7 +59,7 @@ input bool     TradeFriday            = true;    // Allow trades on Friday
 input bool     EnableDiagnostics      = true;    // Log detailed results per bar
 
 // --- System ---
-input int      MagicNumber            = 33333;   // EA magic number
+input int      MagicNumber            = 44444;   // EA magic number
 input int      Slippage               = 5;       // Max slippage (points)
 
 //+------------------------------------------------------------------+
@@ -66,7 +68,7 @@ input int      Slippage               = 5;       // Max slippage (points)
 datetime g_lastBarTime    = 0;
 double   g_pipSize        = 0;
 int      g_pipDigits      = 0;
-string   g_commentTag     = "LTSv3";
+string   g_commentTag     = "LTSv4";
 double   g_startBalance   = 0;
 bool     g_ordersPlacedToday = false;
 int      g_lastOrderDay   = -1;
@@ -79,16 +81,16 @@ double   g_rangeLow       = 999999;
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   // Detect pip size based on symbol
+   // Detect pip size based on symbol digits
    if(Digits == 5 || Digits == 3)
    {
-      // Forex with extra digit (e.g. EURUSD 1.12345)
+      // Forex with extra digit (e.g. GBPUSD 1.12345)
       g_pipSize  = Point * 10;
       g_pipDigits = 1;
    }
    else if(Digits <= 2)
    {
-      // Indices like USTEC, US30 — 1 pip = 1 full index point
+      // Indices / Gold — 1 pip = 1 full point
       g_pipSize  = 1.0;
       g_pipDigits = 0;
    }
@@ -101,9 +103,9 @@ int OnInit()
 
    g_startBalance = AccountBalance();
 
-   Print("LTS Edge v3.1 (NY Breakout) initialized on ", Symbol());
+   Print("LTS Edge v4.0 (London Breakout) initialized on ", Symbol());
    Print("Pip size: ", g_pipSize, " Digits: ", Digits, " Point: ", Point);
-   Print("Range: ", RangeStartHour, ":", RangeStartMinute, "-",
+   Print("Asian Range: ", RangeStartHour, ":", RangeStartMinute, "-",
          RangeEndHour, ":", RangeEndMinute, " UK",
          (UKSummerTime ? " (BST)" : " (GMT)"));
    Print("Close trades: ", CloseTradesHour, ":00 UK | Cancel pending: ", CancelOrdersHour, ":00 UK");
@@ -120,7 +122,7 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    Comment("");
-   Print("LTS Edge v3.1 removed. Reason: ", reason);
+   Print("LTS Edge v4.0 removed. Reason: ", reason);
 }
 
 //+------------------------------------------------------------------+
@@ -150,13 +152,13 @@ void OnTick()
       g_rangeLow = 999999;
    }
 
-   // Track range during range-building period
+   // Track range during Asian session
    if(IsInRangePeriod())
    {
       TrackRange();
    }
 
-   // At range end, place breakout orders
+   // At range end (London open), place breakout orders
    if(IsRangeEndTime() && !g_ordersPlacedToday && !HasPendingOrOpenTrade() && g_rangeReady)
    {
       if(IsTradingDay() && !CheckDailyDrawdown())
@@ -203,7 +205,7 @@ int UKToServerHour(int ukHour)
 }
 
 //+------------------------------------------------------------------+
-//| Check if we're currently in the range-building period             |
+//| Check if we're currently in the Asian range period                |
 //+------------------------------------------------------------------+
 bool IsInRangePeriod()
 {
@@ -221,7 +223,7 @@ bool IsInRangePeriod()
 }
 
 //+------------------------------------------------------------------+
-//| Track high/low during range period                                |
+//| Track high/low during Asian range period                          |
 //+------------------------------------------------------------------+
 void TrackRange()
 {
@@ -241,7 +243,7 @@ void TrackRange()
 }
 
 //+------------------------------------------------------------------+
-//| Check if current time is the range end                            |
+//| Check if current time is the range end (London open)              |
 //+------------------------------------------------------------------+
 bool IsRangeEndTime()
 {
@@ -333,7 +335,7 @@ bool HasPendingOrOpenTrade()
 }
 
 //+------------------------------------------------------------------+
-//| Place breakout pending orders above and below range               |
+//| Place breakout pending orders above and below Asian range         |
 //+------------------------------------------------------------------+
 void PlaceBreakoutOrders()
 {
@@ -365,7 +367,7 @@ void PlaceBreakoutOrders()
 
    if(EnableDiagnostics)
    {
-      Print("Range: High=", DoubleToString(g_rangeHigh, Digits),
+      Print("Asian Range: High=", DoubleToString(g_rangeHigh, Digits),
             " Low=", DoubleToString(g_rangeLow, Digits),
             " Width=", DoubleToString(rangeWidthPips, 1), " pips");
    }
@@ -410,16 +412,9 @@ void PlaceBreakoutOrders()
       return;
    }
 
-   // --- Calculate order parameters ---
+   // --- Calculate SL distance ---
    // SL = opposite side of range + buffer
    double slDistancePips = rangeWidthPips + (BreakoutBufferPips * 2.0);
-
-   // Set expiry
-   int serverCancelHour = UKToServerHour(CancelOrdersHour);
-   datetime today = StringToTime(TimeToString(TimeCurrent(), TIME_DATE));
-   datetime expiry = today + serverCancelHour * 3600;
-   if(serverCancelHour <= TimeHour(TimeCurrent()))
-      expiry += 86400;
 
    // Place BUY STOP (or market buy if already broken out)
    if(allowBuy)
@@ -452,8 +447,7 @@ void PlaceBreakoutOrders()
       int buyTicket = OrderSend(
          Symbol(), buyOrderType, buyLots,
          buyPrice, Slippage, buySL, buyTP,
-         g_commentTag + " BUY", MagicNumber,
-         (buyOrderType == OP_BUYSTOP ? expiry : 0), clrGreen
+         g_commentTag + " BUY", MagicNumber, 0, clrGreen
       );
 
       if(buyTicket < 0)
@@ -505,8 +499,7 @@ void PlaceBreakoutOrders()
       int sellTicket = OrderSend(
          Symbol(), sellOrderType, sellLots,
          sellPrice, Slippage, sellSL, sellTP,
-         g_commentTag + " SELL", MagicNumber,
-         (sellOrderType == OP_SELLSTOP ? expiry : 0), clrRed
+         g_commentTag + " SELL", MagicNumber, 0, clrRed
       );
 
       if(sellTicket < 0)
@@ -531,7 +524,7 @@ void PlaceBreakoutOrders()
 
    if(EnableDiagnostics)
    {
-      Print("=== BREAKOUT ORDERS PLACED === Range: ", DoubleToString(rangeWidthPips, 1), " pips",
+      Print("=== LONDON BREAKOUT ORDERS PLACED === Range: ", DoubleToString(rangeWidthPips, 1), " pips",
             " Buy:", (allowBuy ? "YES" : "NO"),
             " Sell:", (allowSell ? "YES" : "NO"));
    }
@@ -586,19 +579,22 @@ void CheckSessionClose()
 {
    int hour = TimeHour(TimeCurrent());
    int serverCloseHour = UKToServerHour(CloseTradesHour);
-   int serverRangeEndHour = UKToServerHour(RangeEndHour);
+   int serverRangeStartHour = UKToServerHour(RangeStartHour);
 
-   // Handle midnight wrap (e.g., 21:00 UK = 00:00 server when UTC+3)
+   // Handle midnight wrap
+   // For London strategy: range starts at 00:00 UK (03:00 server UTC+3)
+   // Close at 16:00 UK (19:00 server UTC+3)
+   // So serverCloseHour (19) > serverRangeStartHour (3) — no wrap, simple comparison
    bool pastClose;
-   if(serverCloseHour > serverRangeEndHour)
+   if(serverCloseHour > serverRangeStartHour)
    {
-      // Same day: close hour is after range end, no wrap
+      // Normal case: close is after range start, same day
       pastClose = (hour >= serverCloseHour);
    }
    else
    {
-      // Wraps midnight: close if past midnight close AND before range end
-      pastClose = (hour >= serverCloseHour && hour < serverRangeEndHour);
+      // Wraps midnight
+      pastClose = (hour >= serverCloseHour && hour < serverRangeStartHour);
    }
 
    if(!pastClose)
@@ -640,7 +636,7 @@ void CheckCancelPending()
    int serverCancelHour = UKToServerHour(CancelOrdersHour);
    int serverRangeEndHour = UKToServerHour(RangeEndHour);
 
-   // Handle midnight wrap
+   // Cancel pending if past cancel hour but still within session day
    bool pastCancel;
    if(serverCancelHour > serverRangeEndHour)
    {
@@ -800,7 +796,6 @@ void UpdateChartDisplay()
    int closeMins      = UKToServerHour(CloseTradesHour) * 60;
 
    bool inRange = IsInRangePeriod();
-   bool inSession = (currentMins >= rangeEndMins && currentMins < closeMins);
 
    int pendingCount = 0;
    int openCount = 0;
@@ -819,27 +814,27 @@ void UpdateChartDisplay()
    }
 
    string display = "";
-   display += "=== LTS Edge v3.1 (NY Breakout) ===\n";
+   display += "=== LTS Edge v4.0 (London Breakout) ===\n";
    display += "Symbol: " + Symbol() + "\n";
 
    if(inRange)
-      display += "Status: BUILDING RANGE\n";
-   else if(inSession)
-      display += "Status: SESSION ACTIVE\n";
+      display += "Status: BUILDING ASIAN RANGE\n";
+   else if(g_ordersPlacedToday)
+      display += "Status: LONDON SESSION ACTIVE\n";
    else
-      display += "Status: Outside session\n";
+      display += "Status: Waiting for Asian session\n";
 
    display += "Spread: " + DoubleToString(spreadPips, 1) + " pips\n";
 
    if(g_rangeReady)
    {
       double rangeWidth = (g_rangeHigh - g_rangeLow) / g_pipSize;
-      display += "Range: " + DoubleToString(g_rangeLow, Digits) + " - " + DoubleToString(g_rangeHigh, Digits) +
+      display += "Asian Range: " + DoubleToString(g_rangeLow, Digits) + " - " + DoubleToString(g_rangeHigh, Digits) +
                  " (" + DoubleToString(rangeWidth, 1) + " pips)\n";
    }
    else
    {
-      display += "Range: Not yet built\n";
+      display += "Asian Range: Not yet built\n";
    }
 
    display += "Open: " + IntegerToString(openCount) + " | Pending: " + IntegerToString(pendingCount) + "\n";

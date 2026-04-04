@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
-//|                                                  LTS_Edge_v1.mq4 |
-//|                        NY Session Breakout — XAUUSD Gold           |
-//|                        Trades the opening range breakout           |
-//|                        v3.1 — Optimized MaxRange for Gold          |
+//|                                                  LTS_Edge_v3.mq4 |
+//|                        London Mean Reversion — XAUUSD              |
+//|                        Fades Asian range liquidity sweeps          |
+//|                        v5.0 — Mean Reversion Strategy              |
 //+------------------------------------------------------------------+
-#property copyright "LTS Edge v3.1"
+#property copyright "LTS Edge v5.0"
 #property link      ""
-#property version   "3.10"
+#property version   "5.00"
 #property strict
 
 //+------------------------------------------------------------------+
@@ -14,30 +14,31 @@
 //+------------------------------------------------------------------+
 
 // --- Risk Management ---
-input double   RiskPercent            = 1.0;     // Risk per trade (% of balance)
-input double   RiskRewardRatio        = 2.0;     // TP as multiple of range width
+input double   RiskPercent            = 1.5;     // Risk per trade (% of balance)
 input double   MaxDailyDrawdownPct    = 3.0;     // Max daily drawdown % — stop trading
 
-// --- Range Definition (UK time) ---
-input int      RangeStartHour         = 14;      // Range start hour (UK time)
-input int      RangeStartMinute       = 30;      // Range start minute (UK time)
-input int      RangeEndHour           = 15;      // Range end hour (UK time)
-input int      RangeEndMinute         = 0;       // Range end minute (UK time)
-input double   MinRangePips           = 3.0;     // Min range size in pips (XAUUSD: 3)
-input double   MaxRangePips           = 40.0;    // Max range size in pips (XAUUSD: 40)
-input double   BreakoutBufferPips     = 0.5;     // Pips beyond range for pending orders
+// --- Asian Range Definition (UK time) ---
+input int      RangeStartHour         = 0;       // Asian range start hour (UK time)
+input int      RangeStartMinute       = 0;       // Asian range start minute
+input int      RangeEndHour           = 7;       // Asian range end hour (UK time)
+input int      RangeEndMinute         = 0;       // Asian range end minute
+
+// --- Range Filters ---
+input double   MinRangePips           = 3.0;     // Min Asian range size (pips)
+input double   MaxRangePips           = 100.0;   // Max Asian range size (pips)
+
+// --- Entry Window (UK time) ---
+input int      EntryStartHour         = 8;       // Look for entries from (UK time)
+input int      EntryEndHour           = 10;      // Stop looking for entries at (UK time)
+
+// --- Mean Reversion Parameters ---
+input double   MinExtensionPct        = 25.0;    // Min overextension (% of range width)
+input double   MaxExtensionPct        = 100.0;   // Max overextension (% of range width) — beyond = real move
+input double   ReversalBufferPips     = 3.0;     // Reversal candle must close within X pips of range edge
+input double   SLBufferPips           = 2.0;     // SL buffer beyond the spike extreme
 
 // --- Session Management ---
-input int      CloseTradesHour        = 21;      // Close open trades at this hour (UK time)
-input int      CancelOrdersHour       = 18;      // Cancel unfilled pending orders (UK time)
-
-// --- Trend Filter ---
-input bool     UseTrendFilter         = true;    // Only trade breakout in trend direction
-input int      TrendEMAPeriod         = 200;     // EMA period for trend filter (D1)
-input int      TrendFilterTF          = PERIOD_D1; // Timeframe for trend EMA
-
-// --- Bias ---
-input int      TradeBias              = 0;       // 0 = both directions, 1 = long only, -1 = short only
+input int      CloseTradesHour        = 16;      // Close open trades at this hour (UK time)
 
 // --- Filters ---
 input double   MaxSpreadPips          = 0.5;     // Max allowed spread (pips)
@@ -47,69 +48,70 @@ input int      BrokerUTCOffset        = 3;       // Broker server UTC offset (IC
 input bool     UKSummerTime           = false;   // UK is on BST (UTC+1) — set true late Mar-Oct
 
 // --- Day Filter ---
-input bool     TradeMonday            = true;    // Allow trades on Monday
+input bool     TradeMonday            = false;   // Allow trades on Monday
 input bool     TradeTuesday           = true;    // Allow trades on Tuesday
 input bool     TradeWednesday         = true;    // Allow trades on Wednesday
 input bool     TradeThursday          = true;    // Allow trades on Thursday
-input bool     TradeFriday            = true;    // Allow trades on Friday
+input bool     TradeFriday            = false;   // Allow trades on Friday
 
 // --- Diagnostics ---
 input bool     EnableDiagnostics      = true;    // Log detailed results per bar
 
 // --- System ---
-input int      MagicNumber            = 33333;   // EA magic number
+input int      MagicNumber            = 55555;   // EA magic number
 input int      Slippage               = 5;       // Max slippage (points)
 
 //+------------------------------------------------------------------+
 //| Global Variables                                                  |
 //+------------------------------------------------------------------+
-datetime g_lastBarTime    = 0;
-double   g_pipSize        = 0;
-int      g_pipDigits      = 0;
-string   g_commentTag     = "LTSv3";
-double   g_startBalance   = 0;
-bool     g_ordersPlacedToday = false;
-int      g_lastOrderDay   = -1;
-bool     g_rangeReady     = false;
-double   g_rangeHigh      = 0;
-double   g_rangeLow       = 999999;
+datetime g_lastBarTime       = 0;
+double   g_pipSize           = 0;
+int      g_pipDigits         = 0;
+string   g_commentTag        = "LTSv5";
+double   g_startBalance      = 0;
+bool     g_tradeTakenToday   = false;
+int      g_lastTradeDay      = -1;
+bool     g_rangeReady        = false;
+double   g_rangeHigh         = 0;
+double   g_rangeLow          = 999999;
+double   g_spikeHigh         = 0;      // Track highest point of upward spike
+double   g_spikeLow          = 999999; // Track lowest point of downward spike
+bool     g_spikeUpDetected   = false;  // Price spiked above Asian range
+bool     g_spikeDownDetected = false;  // Price spiked below Asian range
 
 //+------------------------------------------------------------------+
 //| Expert initialization                                             |
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   // Detect pip size based on symbol
+   // Detect pip size based on symbol digits
    if(Digits == 5 || Digits == 3)
    {
-      // Forex with extra digit (e.g. EURUSD 1.12345)
       g_pipSize  = Point * 10;
       g_pipDigits = 1;
    }
    else if(Digits <= 2)
    {
-      // Indices like USTEC, US30 — 1 pip = 1 full index point
       g_pipSize  = 1.0;
       g_pipDigits = 0;
    }
    else
    {
-      // Standard 4-digit forex
       g_pipSize  = Point;
       g_pipDigits = 0;
    }
 
    g_startBalance = AccountBalance();
 
-   Print("LTS Edge v3.1 (NY Breakout) initialized on ", Symbol());
+   Print("LTS Edge v5.0 (London Mean Reversion) initialized on ", Symbol());
    Print("Pip size: ", g_pipSize, " Digits: ", Digits, " Point: ", Point);
-   Print("Range: ", RangeStartHour, ":", RangeStartMinute, "-",
+   Print("Asian Range: ", RangeStartHour, ":", RangeStartMinute, "-",
          RangeEndHour, ":", RangeEndMinute, " UK",
          (UKSummerTime ? " (BST)" : " (GMT)"));
-   Print("Close trades: ", CloseTradesHour, ":00 UK | Cancel pending: ", CancelOrdersHour, ":00 UK");
-   Print("Risk: ", RiskPercent, "% RR: ", RiskRewardRatio,
-         " Bias: ", (TradeBias == 1 ? "LONG ONLY" : (TradeBias == -1 ? "SHORT ONLY" : "BOTH")));
-   Print("Trend filter: ", UseTrendFilter, " EMA(", TrendEMAPeriod, ") on TF ", TrendFilterTF);
+   Print("Entry window: ", EntryStartHour, ":00-", EntryEndHour, ":00 UK");
+   Print("Close trades: ", CloseTradesHour, ":00 UK");
+   Print("Risk: ", RiskPercent, "% | Extension: ", MinExtensionPct, "-", MaxExtensionPct, "%");
+   Print("Reversal buffer: ", ReversalBufferPips, " pips | SL buffer: ", SLBufferPips, " pips");
 
    return(INIT_SUCCEEDED);
 }
@@ -120,7 +122,7 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    Comment("");
-   Print("LTS Edge v3.1 removed. Reason: ", reason);
+   Print("LTS Edge v5.0 removed. Reason: ", reason);
 }
 
 //+------------------------------------------------------------------+
@@ -128,10 +130,8 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
 {
-   // Always check OCO and session close on every tick
-   ManageOCO();
+   // Always check session close on every tick
    CheckSessionClose();
-   CheckCancelPending();
 
    UpdateChartDisplay();
 
@@ -140,28 +140,32 @@ void OnTick()
 
    // Reset daily tracker
    int today = TimeDay(TimeCurrent());
-   if(today != g_lastOrderDay)
+   if(today != g_lastTradeDay)
    {
-      g_ordersPlacedToday = false;
-      g_lastOrderDay = today;
+      g_tradeTakenToday = false;
+      g_lastTradeDay = today;
       g_startBalance = AccountBalance();
       g_rangeReady = false;
       g_rangeHigh = 0;
       g_rangeLow = 999999;
+      g_spikeHigh = 0;
+      g_spikeLow = 999999;
+      g_spikeUpDetected = false;
+      g_spikeDownDetected = false;
    }
 
-   // Track range during range-building period
+   // Track range during Asian session
    if(IsInRangePeriod())
    {
       TrackRange();
    }
 
-   // At range end, place breakout orders
-   if(IsRangeEndTime() && !g_ordersPlacedToday && !HasPendingOrOpenTrade() && g_rangeReady)
+   // Check for mean reversion entry during London session
+   if(IsInEntryWindow() && !g_tradeTakenToday && !HasOpenTrade() && g_rangeReady)
    {
       if(IsTradingDay() && !CheckDailyDrawdown())
       {
-         PlaceBreakoutOrders();
+         CheckMeanReversionEntry();
       }
    }
 }
@@ -203,7 +207,7 @@ int UKToServerHour(int ukHour)
 }
 
 //+------------------------------------------------------------------+
-//| Check if we're currently in the range-building period             |
+//| Check if we're currently in the Asian range period                |
 //+------------------------------------------------------------------+
 bool IsInRangePeriod()
 {
@@ -221,14 +225,13 @@ bool IsInRangePeriod()
 }
 
 //+------------------------------------------------------------------+
-//| Track high/low during range period                                |
+//| Track high/low during Asian range period                          |
 //+------------------------------------------------------------------+
 void TrackRange()
 {
    double high = iHigh(Symbol(), PERIOD_M5, 0);
    double low  = iLow(Symbol(), PERIOD_M5, 0);
 
-   // Also check bar 1 in case we just entered the range period
    double high1 = iHigh(Symbol(), PERIOD_M5, 1);
    double low1  = iLow(Symbol(), PERIOD_M5, 1);
 
@@ -241,18 +244,21 @@ void TrackRange()
 }
 
 //+------------------------------------------------------------------+
-//| Check if current time is the range end                            |
+//| Check if current time is in the entry window                      |
 //+------------------------------------------------------------------+
-bool IsRangeEndTime()
+bool IsInEntryWindow()
 {
    int hour = TimeHour(TimeCurrent());
    int minute = TimeMinute(TimeCurrent());
    int currentMins = hour * 60 + minute;
 
-   int endMins = UKToServerMinutes(RangeEndHour, RangeEndMinute);
+   int startMins = UKToServerMinutes(EntryStartHour, 0);
+   int endMins   = UKToServerMinutes(EntryEndHour, 0);
 
-   // Match within the current M5 bar (5-minute window)
-   return (currentMins >= endMins && currentMins < endMins + 5);
+   if(startMins < endMins)
+      return (currentMins >= startMins && currentMins < endMins);
+   else
+      return (currentMins >= startMins || currentMins < endMins);
 }
 
 //+------------------------------------------------------------------+
@@ -317,234 +323,10 @@ bool CheckDailyDrawdown()
 }
 
 //+------------------------------------------------------------------+
-//| Check if EA has pending or open trades                            |
+//| Check if EA has open trades                                       |
 //+------------------------------------------------------------------+
-bool HasPendingOrOpenTrade()
+bool HasOpenTrade()
 {
-   for(int i = OrdersTotal() - 1; i >= 0; i--)
-   {
-      if(OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
-      {
-         if(OrderSymbol() == Symbol() && OrderMagicNumber() == MagicNumber)
-            return true;
-      }
-   }
-   return false;
-}
-
-//+------------------------------------------------------------------+
-//| Place breakout pending orders above and below range               |
-//+------------------------------------------------------------------+
-void PlaceBreakoutOrders()
-{
-   // Check spread
-   double spreadPips = (Ask - Bid) / g_pipSize;
-   if(spreadPips > MaxSpreadPips)
-   {
-      if(EnableDiagnostics)
-         Print("Spread too high: ", DoubleToString(spreadPips, 1), " > ", MaxSpreadPips);
-      return;
-   }
-
-   double rangeWidthPips = (g_rangeHigh - g_rangeLow) / g_pipSize;
-
-   // Check range size
-   if(rangeWidthPips < MinRangePips)
-   {
-      if(EnableDiagnostics)
-         Print("Range too small: ", DoubleToString(rangeWidthPips, 1), " < ", MinRangePips);
-      return;
-   }
-
-   if(rangeWidthPips > MaxRangePips)
-   {
-      if(EnableDiagnostics)
-         Print("Range too large: ", DoubleToString(rangeWidthPips, 1), " > ", MaxRangePips);
-      return;
-   }
-
-   if(EnableDiagnostics)
-   {
-      Print("Range: High=", DoubleToString(g_rangeHigh, Digits),
-            " Low=", DoubleToString(g_rangeLow, Digits),
-            " Width=", DoubleToString(rangeWidthPips, 1), " pips");
-   }
-
-   double buffer = BreakoutBufferPips * g_pipSize;
-
-   // --- Trend filter ---
-   bool allowBuy = true;
-   bool allowSell = true;
-
-   // Apply trade bias
-   if(TradeBias == 1)
-      allowSell = false;
-   else if(TradeBias == -1)
-      allowBuy = false;
-
-   // Apply trend filter
-   if(UseTrendFilter)
-   {
-      double trendEMA = iMA(Symbol(), TrendFilterTF, TrendEMAPeriod, 0, MODE_EMA, PRICE_CLOSE, 0);
-      double price = (Ask + Bid) / 2.0;
-
-      if(price > trendEMA)
-      {
-         allowSell = false;
-         if(EnableDiagnostics)
-            Print("Trend filter: BULLISH (price > D1 EMA ", DoubleToString(trendEMA, Digits), ") — BUY only");
-      }
-      else
-      {
-         allowBuy = false;
-         if(EnableDiagnostics)
-            Print("Trend filter: BEARISH (price < D1 EMA ", DoubleToString(trendEMA, Digits), ") — SELL only");
-      }
-   }
-
-   if(!allowBuy && !allowSell)
-   {
-      if(EnableDiagnostics)
-         Print("No direction allowed (bias + trend conflict). Skipping.");
-      g_ordersPlacedToday = true;
-      return;
-   }
-
-   // --- Calculate order parameters ---
-   // SL = opposite side of range + buffer
-   double slDistancePips = rangeWidthPips + (BreakoutBufferPips * 2.0);
-
-   // Set expiry
-   int serverCancelHour = UKToServerHour(CancelOrdersHour);
-   datetime today = StringToTime(TimeToString(TimeCurrent(), TIME_DATE));
-   datetime expiry = today + serverCancelHour * 3600;
-   if(serverCancelHour <= TimeHour(TimeCurrent()))
-      expiry += 86400;
-
-   // Place BUY STOP (or market buy if already broken out)
-   if(allowBuy)
-   {
-      double buyEntry = NormalizeDouble(g_rangeHigh + buffer, Digits);
-      double buySL    = NormalizeDouble(g_rangeLow - buffer, Digits);
-      double buySlPips = (buyEntry - buySL) / g_pipSize;
-      double buyTP    = NormalizeDouble(buyEntry + buySlPips * g_pipSize * RiskRewardRatio, Digits);
-      double buyLots  = CalculateLotSize(buySlPips);
-
-      int buyOrderType;
-      double buyPrice;
-
-      if(Ask >= buyEntry)
-      {
-         // Price already above breakout level — use market order
-         buyOrderType = OP_BUY;
-         buyPrice = Ask;
-         // Recalculate TP based on actual entry
-         buyTP = NormalizeDouble(buyPrice + buySlPips * g_pipSize * RiskRewardRatio, Digits);
-         if(EnableDiagnostics)
-            Print("Price already broke out upward (Ask=", Ask, " >= Entry=", buyEntry, ") — using MARKET BUY");
-      }
-      else
-      {
-         buyOrderType = OP_BUYSTOP;
-         buyPrice = buyEntry;
-      }
-
-      int buyTicket = OrderSend(
-         Symbol(), buyOrderType, buyLots,
-         buyPrice, Slippage, buySL, buyTP,
-         g_commentTag + " BUY", MagicNumber,
-         (buyOrderType == OP_BUYSTOP ? expiry : 0), clrGreen
-      );
-
-      if(buyTicket < 0)
-      {
-         int err = GetLastError();
-         Print((buyOrderType == OP_BUY ? "MARKET BUY" : "BUY STOP"),
-               " failed. Error: ", err, " - ", ErrorDescription(err),
-               " Entry: ", buyPrice, " SL: ", buySL, " TP: ", buyTP, " Lots: ", buyLots);
-      }
-      else
-      {
-         Print((buyOrderType == OP_BUY ? "MARKET BUY" : "BUY STOP"),
-               " placed. Ticket: ", buyTicket,
-               " Entry: ", DoubleToString(buyPrice, Digits),
-               " SL: ", DoubleToString(buySL, Digits),
-               " TP: ", DoubleToString(buyTP, Digits),
-               " Lots: ", DoubleToString(buyLots, 2));
-      }
-   }
-
-   // Place SELL STOP (or market sell if already broken out)
-   if(allowSell)
-   {
-      double sellEntry = NormalizeDouble(g_rangeLow - buffer, Digits);
-      double sellSL    = NormalizeDouble(g_rangeHigh + buffer, Digits);
-      double sellSlPips = (sellSL - sellEntry) / g_pipSize;
-      double sellTP    = NormalizeDouble(sellEntry - sellSlPips * g_pipSize * RiskRewardRatio, Digits);
-      double sellLots  = CalculateLotSize(sellSlPips);
-
-      int sellOrderType;
-      double sellPrice;
-
-      if(Bid <= sellEntry)
-      {
-         // Price already below breakout level — use market order
-         sellOrderType = OP_SELL;
-         sellPrice = Bid;
-         // Recalculate TP based on actual entry
-         sellTP = NormalizeDouble(sellPrice - sellSlPips * g_pipSize * RiskRewardRatio, Digits);
-         if(EnableDiagnostics)
-            Print("Price already broke out downward (Bid=", Bid, " <= Entry=", sellEntry, ") — using MARKET SELL");
-      }
-      else
-      {
-         sellOrderType = OP_SELLSTOP;
-         sellPrice = sellEntry;
-      }
-
-      int sellTicket = OrderSend(
-         Symbol(), sellOrderType, sellLots,
-         sellPrice, Slippage, sellSL, sellTP,
-         g_commentTag + " SELL", MagicNumber,
-         (sellOrderType == OP_SELLSTOP ? expiry : 0), clrRed
-      );
-
-      if(sellTicket < 0)
-      {
-         int err = GetLastError();
-         Print((sellOrderType == OP_SELL ? "MARKET SELL" : "SELL STOP"),
-               " failed. Error: ", err, " - ", ErrorDescription(err),
-               " Entry: ", sellPrice, " SL: ", sellSL, " TP: ", sellTP, " Lots: ", sellLots);
-      }
-      else
-      {
-         Print((sellOrderType == OP_SELL ? "MARKET SELL" : "SELL STOP"),
-               " placed. Ticket: ", sellTicket,
-               " Entry: ", DoubleToString(sellPrice, Digits),
-               " SL: ", DoubleToString(sellSL, Digits),
-               " TP: ", DoubleToString(sellTP, Digits),
-               " Lots: ", DoubleToString(sellLots, 2));
-      }
-   }
-
-   g_ordersPlacedToday = true;
-
-   if(EnableDiagnostics)
-   {
-      Print("=== BREAKOUT ORDERS PLACED === Range: ", DoubleToString(rangeWidthPips, 1), " pips",
-            " Buy:", (allowBuy ? "YES" : "NO"),
-            " Sell:", (allowSell ? "YES" : "NO"));
-   }
-}
-
-//+------------------------------------------------------------------+
-//| OCO: when one pending order triggers, cancel the other            |
-//+------------------------------------------------------------------+
-void ManageOCO()
-{
-   bool hasOpenTrade = false;
-   bool hasPending = false;
-
    for(int i = OrdersTotal() - 1; i >= 0; i--)
    {
       if(OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
@@ -552,29 +334,177 @@ void ManageOCO()
          if(OrderSymbol() == Symbol() && OrderMagicNumber() == MagicNumber)
          {
             if(OrderType() == OP_BUY || OrderType() == OP_SELL)
-               hasOpenTrade = true;
-            else if(OrderType() == OP_BUYSTOP || OrderType() == OP_SELLSTOP)
-               hasPending = true;
+               return true;
          }
       }
    }
+   return false;
+}
 
-   if(hasOpenTrade && hasPending)
+//+------------------------------------------------------------------+
+//| Mean reversion entry logic                                        |
+//+------------------------------------------------------------------+
+void CheckMeanReversionEntry()
+{
+   // Check spread first
+   double spreadPips = (Ask - Bid) / g_pipSize;
+   if(spreadPips > MaxSpreadPips)
+      return;
+
+   double rangeWidthPips = (g_rangeHigh - g_rangeLow) / g_pipSize;
+
+   // Validate range size
+   if(rangeWidthPips < MinRangePips || rangeWidthPips > MaxRangePips)
    {
-      for(int i = OrdersTotal() - 1; i >= 0; i--)
+      if(EnableDiagnostics && !g_tradeTakenToday)
       {
-         if(OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
+         // Only log once per day to avoid spam
+         static int lastRangeLogDay = -1;
+         if(TimeDay(TimeCurrent()) != lastRangeLogDay)
          {
-            if(OrderSymbol() == Symbol() && OrderMagicNumber() == MagicNumber)
-            {
-               if(OrderType() == OP_BUYSTOP || OrderType() == OP_SELLSTOP)
-               {
-                  bool result = OrderDelete(OrderTicket());
-                  if(result)
-                     Print("OCO: Cancelled pending order ", OrderTicket());
-               }
-            }
+            if(rangeWidthPips < MinRangePips)
+               Print("Range too small: ", DoubleToString(rangeWidthPips, 1), " < ", MinRangePips);
+            else
+               Print("Range too large: ", DoubleToString(rangeWidthPips, 1), " > ", MaxRangePips);
+            lastRangeLogDay = TimeDay(TimeCurrent());
          }
+      }
+      return;
+   }
+
+   double rangeWidth = g_rangeHigh - g_rangeLow;
+   double minExtension = rangeWidth * MinExtensionPct / 100.0;
+   double maxExtension = rangeWidth * MaxExtensionPct / 100.0;
+
+   // Get the last closed M5 bar (bar 1)
+   double barHigh  = iHigh(Symbol(), PERIOD_M5, 1);
+   double barLow   = iLow(Symbol(), PERIOD_M5, 1);
+   double barClose = iClose(Symbol(), PERIOD_M5, 1);
+   double barOpen  = iOpen(Symbol(), PERIOD_M5, 1);
+
+   // Track spike extremes during entry window
+   if(barHigh > g_spikeHigh) g_spikeHigh = barHigh;
+   if(barLow < g_spikeLow) g_spikeLow = barLow;
+
+   // Also check current bar for spike tracking
+   double curHigh = iHigh(Symbol(), PERIOD_M5, 0);
+   double curLow  = iLow(Symbol(), PERIOD_M5, 0);
+   if(curHigh > g_spikeHigh) g_spikeHigh = curHigh;
+   if(curLow < g_spikeLow) g_spikeLow = curLow;
+
+   // --- Check for SELL setup (price spiked above Asian high, then reversed) ---
+   double upExtension = barHigh - g_rangeHigh;
+   if(upExtension >= minExtension && upExtension <= maxExtension)
+   {
+      g_spikeUpDetected = true;
+   }
+
+   if(g_spikeUpDetected)
+   {
+      // Check reversal: bar closed back near or below the Asian high
+      double distFromHigh = barClose - g_rangeHigh;
+      double reversalBufferPrice = ReversalBufferPips * g_pipSize;
+
+      if(distFromHigh <= reversalBufferPrice)
+      {
+         // Reversal confirmed — place SELL
+         double sl = NormalizeDouble(g_spikeHigh + SLBufferPips * g_pipSize, Digits);
+         double tp = NormalizeDouble((g_rangeHigh + g_rangeLow) / 2.0, Digits);
+         double slPips = (sl - Bid) / g_pipSize;
+         double lots = CalculateLotSize(slPips);
+
+         if(EnableDiagnostics)
+         {
+            Print("Asian Range: High=", DoubleToString(g_rangeHigh, Digits),
+                  " Low=", DoubleToString(g_rangeLow, Digits),
+                  " Width=", DoubleToString(rangeWidthPips, 1), " pips");
+            Print("Spike UP detected: High=", DoubleToString(g_spikeHigh, Digits),
+                  " Extension=", DoubleToString(upExtension / g_pipSize, 1), " pips (",
+                  DoubleToString(upExtension / rangeWidth * 100, 0), "% of range)");
+            Print("Reversal confirmed: Close=", DoubleToString(barClose, Digits),
+                  " within ", ReversalBufferPips, " pips of Asian High");
+         }
+
+         int ticket = OrderSend(
+            Symbol(), OP_SELL, lots,
+            Bid, Slippage, sl, tp,
+            g_commentTag + " SELL MR", MagicNumber, 0, clrRed
+         );
+
+         if(ticket < 0)
+         {
+            int err = GetLastError();
+            Print("SELL failed. Error: ", err, " - ", ErrorDescription(err),
+                  " Entry: ", Bid, " SL: ", sl, " TP: ", tp, " Lots: ", lots);
+         }
+         else
+         {
+            Print("MEAN REVERSION SELL placed. Ticket: ", ticket,
+                  " Entry: ", DoubleToString(Bid, Digits),
+                  " SL: ", DoubleToString(sl, Digits),
+                  " TP: ", DoubleToString(tp, Digits),
+                  " Lots: ", DoubleToString(lots, 2));
+            g_tradeTakenToday = true;
+         }
+         return;
+      }
+   }
+
+   // --- Check for BUY setup (price spiked below Asian low, then reversed) ---
+   double downExtension = g_rangeLow - barLow;
+   if(downExtension >= minExtension && downExtension <= maxExtension)
+   {
+      g_spikeDownDetected = true;
+   }
+
+   if(g_spikeDownDetected)
+   {
+      // Check reversal: bar closed back near or above the Asian low
+      double distFromLow = g_rangeLow - barClose;
+      double reversalBufferPrice = ReversalBufferPips * g_pipSize;
+
+      if(distFromLow <= reversalBufferPrice)
+      {
+         // Reversal confirmed — place BUY
+         double sl = NormalizeDouble(g_spikeLow - SLBufferPips * g_pipSize, Digits);
+         double tp = NormalizeDouble((g_rangeHigh + g_rangeLow) / 2.0, Digits);
+         double slPips = (Ask - sl) / g_pipSize;
+         double lots = CalculateLotSize(slPips);
+
+         if(EnableDiagnostics)
+         {
+            Print("Asian Range: High=", DoubleToString(g_rangeHigh, Digits),
+                  " Low=", DoubleToString(g_rangeLow, Digits),
+                  " Width=", DoubleToString(rangeWidthPips, 1), " pips");
+            Print("Spike DOWN detected: Low=", DoubleToString(g_spikeLow, Digits),
+                  " Extension=", DoubleToString(downExtension / g_pipSize, 1), " pips (",
+                  DoubleToString(downExtension / rangeWidth * 100, 0), "% of range)");
+            Print("Reversal confirmed: Close=", DoubleToString(barClose, Digits),
+                  " within ", ReversalBufferPips, " pips of Asian Low");
+         }
+
+         int ticket = OrderSend(
+            Symbol(), OP_BUY, lots,
+            Ask, Slippage, sl, tp,
+            g_commentTag + " BUY MR", MagicNumber, 0, clrGreen
+         );
+
+         if(ticket < 0)
+         {
+            int err = GetLastError();
+            Print("BUY failed. Error: ", err, " - ", ErrorDescription(err),
+                  " Entry: ", Ask, " SL: ", sl, " TP: ", tp, " Lots: ", lots);
+         }
+         else
+         {
+            Print("MEAN REVERSION BUY placed. Ticket: ", ticket,
+                  " Entry: ", DoubleToString(Ask, Digits),
+                  " SL: ", DoubleToString(sl, Digits),
+                  " TP: ", DoubleToString(tp, Digits),
+                  " Lots: ", DoubleToString(lots, 2));
+            g_tradeTakenToday = true;
+         }
+         return;
       }
    }
 }
@@ -586,19 +516,16 @@ void CheckSessionClose()
 {
    int hour = TimeHour(TimeCurrent());
    int serverCloseHour = UKToServerHour(CloseTradesHour);
-   int serverRangeEndHour = UKToServerHour(RangeEndHour);
+   int serverRangeStartHour = UKToServerHour(RangeStartHour);
 
-   // Handle midnight wrap (e.g., 21:00 UK = 00:00 server when UTC+3)
    bool pastClose;
-   if(serverCloseHour > serverRangeEndHour)
+   if(serverCloseHour > serverRangeStartHour)
    {
-      // Same day: close hour is after range end, no wrap
       pastClose = (hour >= serverCloseHour);
    }
    else
    {
-      // Wraps midnight: close if past midnight close AND before range end
-      pastClose = (hour >= serverCloseHour && hour < serverRangeEndHour);
+      pastClose = (hour >= serverCloseHour && hour < serverRangeStartHour);
    }
 
    if(!pastClose)
@@ -625,46 +552,6 @@ void CheckSessionClose()
                   Print("Session close: SELL closed at ", Ask);
                else
                   Print("Session close failed. Error: ", GetLastError());
-            }
-         }
-      }
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Cancel unfilled pending orders after cancel hour                  |
-//+------------------------------------------------------------------+
-void CheckCancelPending()
-{
-   int hour = TimeHour(TimeCurrent());
-   int serverCancelHour = UKToServerHour(CancelOrdersHour);
-   int serverRangeEndHour = UKToServerHour(RangeEndHour);
-
-   // Handle midnight wrap
-   bool pastCancel;
-   if(serverCancelHour > serverRangeEndHour)
-   {
-      pastCancel = (hour >= serverCancelHour);
-   }
-   else
-   {
-      pastCancel = (hour >= serverCancelHour && hour < serverRangeEndHour);
-   }
-
-   if(!pastCancel)
-      return;
-
-   for(int i = OrdersTotal() - 1; i >= 0; i--)
-   {
-      if(OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
-      {
-         if(OrderSymbol() == Symbol() && OrderMagicNumber() == MagicNumber)
-         {
-            if(OrderType() == OP_BUYSTOP || OrderType() == OP_SELLSTOP)
-            {
-               bool result = OrderDelete(OrderTicket());
-               if(result)
-                  Print("Cancel hour: Deleted pending order ", OrderTicket());
             }
          }
       }
@@ -730,7 +617,6 @@ double NormalizeLots(double lots)
    double maxLot  = MarketInfo(Symbol(), MODE_MAXLOT);
    double lotStep = MarketInfo(Symbol(), MODE_LOTSTEP);
 
-   // Fallback if MarketInfo returns bad values
    if(minLot <= 0 || minLot > 99999) minLot = 0.01;
    if(maxLot <= 0 || maxLot > 99999) maxLot = 100.0;
    if(lotStep <= 0 || lotStep > 99999) lotStep = 0.01;
@@ -793,16 +679,10 @@ void UpdateChartDisplay()
    double spreadPips = (Ask - Bid) / g_pipSize;
    int hour = TimeHour(TimeCurrent());
    int minute = TimeMinute(TimeCurrent());
-   int currentMins = hour * 60 + minute;
-
-   int rangeStartMins = UKToServerMinutes(RangeStartHour, RangeStartMinute);
-   int rangeEndMins   = UKToServerMinutes(RangeEndHour, RangeEndMinute);
-   int closeMins      = UKToServerHour(CloseTradesHour) * 60;
 
    bool inRange = IsInRangePeriod();
-   bool inSession = (currentMins >= rangeEndMins && currentMins < closeMins);
+   bool inEntry = IsInEntryWindow();
 
-   int pendingCount = 0;
    int openCount = 0;
    for(int i = OrdersTotal() - 1; i >= 0; i--)
    {
@@ -812,20 +692,20 @@ void UpdateChartDisplay()
          {
             if(OrderType() == OP_BUY || OrderType() == OP_SELL)
                openCount++;
-            else
-               pendingCount++;
          }
       }
    }
 
    string display = "";
-   display += "=== LTS Edge v3.1 (NY Breakout) ===\n";
+   display += "=== LTS Edge v5.0 (Mean Reversion) ===\n";
    display += "Symbol: " + Symbol() + "\n";
 
    if(inRange)
-      display += "Status: BUILDING RANGE\n";
-   else if(inSession)
-      display += "Status: SESSION ACTIVE\n";
+      display += "Status: BUILDING ASIAN RANGE\n";
+   else if(inEntry && !g_tradeTakenToday)
+      display += "Status: SCANNING FOR REVERSAL\n";
+   else if(g_tradeTakenToday)
+      display += "Status: TRADE TAKEN TODAY\n";
    else
       display += "Status: Outside session\n";
 
@@ -834,17 +714,22 @@ void UpdateChartDisplay()
    if(g_rangeReady)
    {
       double rangeWidth = (g_rangeHigh - g_rangeLow) / g_pipSize;
-      display += "Range: " + DoubleToString(g_rangeLow, Digits) + " - " + DoubleToString(g_rangeHigh, Digits) +
+      display += "Asian Range: " + DoubleToString(g_rangeLow, Digits) + " - " + DoubleToString(g_rangeHigh, Digits) +
                  " (" + DoubleToString(rangeWidth, 1) + " pips)\n";
+      display += "Midpoint (TP): " + DoubleToString((g_rangeHigh + g_rangeLow) / 2.0, Digits) + "\n";
    }
    else
    {
-      display += "Range: Not yet built\n";
+      display += "Asian Range: Not yet built\n";
    }
 
-   display += "Open: " + IntegerToString(openCount) + " | Pending: " + IntegerToString(pendingCount) + "\n";
-   display += "Orders today: " + (g_ordersPlacedToday ? "YES" : "NO") + "\n";
-   display += "Bias: " + (TradeBias == 1 ? "LONG ONLY" : (TradeBias == -1 ? "SHORT ONLY" : "BOTH")) + "\n";
+   if(g_spikeUpDetected)
+      display += "Spike UP detected: " + DoubleToString(g_spikeHigh, Digits) + "\n";
+   if(g_spikeDownDetected)
+      display += "Spike DOWN detected: " + DoubleToString(g_spikeLow, Digits) + "\n";
+
+   display += "Open trades: " + IntegerToString(openCount) + "\n";
+   display += "Trade taken: " + (g_tradeTakenToday ? "YES" : "NO") + "\n";
    display += "BST: " + (UKSummerTime ? "ON" : "OFF") + " | UTC+" + IntegerToString(BrokerUTCOffset) + "\n";
 
    Comment(display);
