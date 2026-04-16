@@ -57,6 +57,10 @@ input bool     TradeWednesday         = true;    // Allow trades on Wednesday
 input bool     TradeThursday          = true;    // Allow trades on Thursday
 input bool     TradeFriday            = true;    // Allow trades on Friday
 
+// --- AI Filter ---
+input bool     UseAIFilter            = false;   // Read AI signal file before trading
+input string   AISignalFile           = "ai_signal.txt"; // Path to AI signal file
+
 // --- Diagnostics ---
 input bool     EnableDiagnostics      = true;    // Log detailed results per bar
 
@@ -320,6 +324,28 @@ void CheckSqueezeEntry()
       return;
    }
 
+   // AI FILTER — check if conditions are safe
+   if(UseAIFilter)
+   {
+      string aiSignal = ReadAISignal();
+      if(StringFind(aiSignal, "SKIP") == 0)
+      {
+         string reason = "";
+         int pipePos = StringFind(aiSignal, "|");
+         if(pipePos > 0)
+            reason = StringSubstr(aiSignal, pipePos + 1);
+
+         if(EnableDiagnostics)
+            Print("AI FILTER: SKIP — ", reason);
+         g_squeezeCount = 0;
+         return;
+      }
+      else if(EnableDiagnostics)
+      {
+         Print("AI FILTER: TRADE — conditions clear");
+      }
+   }
+
    // SQUEEZE RELEASE CONFIRMED — determine direction
    double close1  = iClose(Symbol(), SignalTimeframe, 1);
    double ema20   = iMA(Symbol(), SignalTimeframe, BBPeriod, 0, MODE_EMA, PRICE_CLOSE, 1);
@@ -557,6 +583,69 @@ double NormalizeLots(double lots)
 
    int lotDecimals = (int)MathMax(0, -MathLog10(lotStep));
    return NormalizeDouble(lots, lotDecimals);
+}
+
+//+------------------------------------------------------------------+
+//| Read AI signal file                                               |
+//+------------------------------------------------------------------+
+string ReadAISignal()
+{
+   if(!UseAIFilter)
+      return "TRADE";
+
+   string filePath = AISignalFile;
+
+   // Try to read from MQL4/Files directory (MT4 sandbox)
+   int handle = FileOpen(filePath, FILE_READ | FILE_TXT | FILE_ANSI);
+   if(handle == INVALID_HANDLE)
+   {
+      if(EnableDiagnostics)
+         Print("AI signal file not found: ", filePath, " — defaulting to TRADE");
+      return "TRADE";
+   }
+
+   string content = "";
+   if(!FileIsEnding(handle))
+      content = FileReadString(handle);
+
+   FileClose(handle);
+
+   if(StringLen(content) == 0)
+   {
+      if(EnableDiagnostics)
+         Print("AI signal file empty — defaulting to TRADE");
+      return "TRADE";
+   }
+
+   // Check if signal is stale (older than 60 minutes)
+   // Format: SIGNAL|reason|2025-04-16 14:30:00 UTC
+   // Find the timestamp part (after second pipe)
+   int firstPipe = StringFind(content, "|");
+   int secondPipe = -1;
+   if(firstPipe > 0)
+      secondPipe = StringFind(content, "|", firstPipe + 1);
+
+   if(secondPipe > 0)
+   {
+      string timestampStr = StringSubstr(content, secondPipe + 1);
+      // Remove " UTC" suffix if present
+      int utcPos = StringFind(timestampStr, " UTC");
+      if(utcPos > 0)
+         timestampStr = StringSubstr(timestampStr, 0, utcPos);
+
+      datetime signalTime = StringToTime(timestampStr);
+      datetime serverTime = TimeCurrent();
+
+      // If signal is older than 60 minutes, treat as stale
+      if(serverTime - signalTime > 3600)
+      {
+         if(EnableDiagnostics)
+            Print("AI signal is stale (", TimeToString(signalTime), " vs ", TimeToString(serverTime), ") — defaulting to TRADE");
+         return "TRADE";
+      }
+   }
+
+   return content;
 }
 
 //+------------------------------------------------------------------+
