@@ -1,14 +1,25 @@
 window,start_date,end_date,settings_tag,result,target_hit_date,return_pct,pf,max_dd_pct,trades,win_rate_pct,sqz_pl,exp_pl,pbk_pl,sqz_signals,exp_signals,pbk_signals,risk_rejects,risk_open_cap,risk_daily_soft,risk_prop_room,risk_strategy_pl,risk_strategy_losses,regime_rejects,start_gate_rejects,dxy_rejects,spread_rejects,start_gate_opened,start_score,start_direction,campaign_state,checkpoint_hit,notes
 Jan 2024,2024-01-01,2024-04-01,v6 baseline,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+Jan 2024,2024-01-01,2024-04-01,v6.1 adaptive checkpoint-only,pass,2024-03-06 16:32,10.00,10.39,3.10,7,85.71,0.00,1912.24,5090.25,0,3,5,0,0,0,0,0,0,508,11,9,0,true,7,BUY_BIAS,TARGET_HIT,true,"Original pass preserved; adaptive effective=4 after checkpoint"
 Feb 2024,2024-02-01,2024-05-01,v6 baseline,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
 Mar 2024,2024-03-01,2024-06-01,v6 baseline,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
 Apr 2024,2024-04-01,2024-07-01,v6 baseline,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
 May 2024,2024-05-01,2024-08-01,v6 baseline,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
-Aug 2024,2024-08-01,2024-11-01,v6 baseline,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+May 2024,2024-05-01,2024-08-01,v6.1 StrategyMaxLossTrades=4,no pass,,-1.90,0.64,3.78,8,25.00,0.00,-450.97,-878.95,0,6,2,2,0,0,0,1,1,246,80,5,0,true,7,BUY_BIAS,ACTIVE_CHALLENGE,false,"Bad-window check worsened from -0.83 baseline to -1.90 but max DD stayed 3.78; trade-off needs more windows"
+May 2024,2024-05-01,2024-08-01,v6.1 adaptive score/checkpoint loss limit,no pass,,-1.90,0.64,3.78,8,25.00,0.00,-450.81,-878.84,0,6,2,2,0,0,0,1,1,223,80,5,0,true,7,BUY_BIAS,ACTIVE_CHALLENGE,false,"Adaptive effective=4 because campaign score reached 4 despite no checkpoint; score-based pre-checkpoint rule is too permissive"
+May 2024,2024-05-01,2024-08-01,v6.1 adaptive checkpoint-only,no pass,,-0.83,0.81,3.78,7,28.57,0.00,298.35,-878.83,0,5,2,2,0,0,0,1,1,210,80,5,0,true,7,BUY_BIAS,ACTIVE_CHALLENGE,false,"Checkpoint-only adaptive kept effective=3 and restored baseline containment"
+Aug 2024,2024-08-01,2024-11-01,v6.1 diagnostic,no pass,,2.97,1.45,3.69,11,45.45,0.00,200.04,1881.82,0,5,6,2,0,0,0,0,2,153,0,4,0,true,8,BUY_BIAS,PROTECTING_PROFIT,true,"Checkpoint hit Aug 13 then both active modules disabled at 3 losses; next test StrategyMaxLossTrades=4"
+Aug 2024,2024-08-01,2024-11-01,v6.1 StrategyMaxLossTrades=4,pass,2024-08-20 11:01,10.00,4.10,3.20,10,70.00,0.00,2623.68,4376.95,0,2,8,0,0,0,0,0,0,60,0,4,0,true,8,BUY_BIAS,TARGET_HIT,true,"Changing only StrategyMaxLossTrades 3->4 converted window to pass; no risk rejects"
+Aug 2024,2024-08-01,2024-11-01,v6.1 adaptive loss limit,pass,2024-08-20 11:01,10.00,4.10,3.20,10,70.00,0.00,2623.56,4376.70,0,2,8,0,0,0,0,0,0,60,0,4,0,true,8,BUY_BIAS,TARGET_HIT,true,"Adaptive effective=4 after checkpoint; retained global-4 pass"
 Sep 2024,2024-09-01,2024-12-01,v6 baseline,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+Sep 2024,2024-09-01,2024-12-01,v6.1 StrategyMaxLossTrades=4,no pass,,1.15,1.21,4.26,10,40.00,0.00,1738.08,-929.76,0,8,2,2,0,0,0,1,1,207,12,2,0,true,7,BUY_BIAS,ACTIVE_CHALLENGE,false,"Worse than baseline +2.18; pullback lost and both module shutoffs fired"
+Sep 2024,2024-09-01,2024-12-01,v6.1 adaptive checkpoint-only,no pass,,2.17,1.48,4.26,9,44.44,0.00,2451.14,-929.61,0,7,2,2,0,0,0,1,1,111,12,0,0,true,7,BUY_BIAS,ACTIVE_CHALLENGE,false,"No checkpoint so effective=3; restored baseline-like result and avoided global-4 degradation"
 Oct 2024,2024-10-01,2025-01-01,v6 baseline,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
 Nov 2024,2024-11-01,2025-02-01,v6 baseline,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
 Q1 2025,2025-01-01,2025-04-01,v6 baseline,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
 Q2 2025,2025-05-01,2025-08-01,v6 baseline,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
 Q3 2025,2025-09-01,2025-12-01,v6 baseline,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+Q3 2025,2025-09-01,2025-12-01,v6.1 StrategyMaxLossTrades=4,pass,2025-09-23 12:09,10.00,3.55,2.59,13,61.54,0.00,2032.05,4970.26,0,4,9,1,0,0,0,0,1,67,0,9,0,true,7,BUY_BIAS,TARGET_HIT,true,"Converted strong non-pass +7.45 baseline to pass; pullback hit 4 losses but campaign score was 5"
+Q3 2025,2025-09-01,2025-12-01,v6.1 adaptive loss limit,pass,2025-09-23 12:09,10.00,3.55,2.59,13,61.54,0.00,2031.60,4969.16,0,4,9,1,0,0,0,0,1,67,0,9,0,true,7,BUY_BIAS,TARGET_HIT,true,"Adaptive effective=4 after checkpoint; retained global-4 pass"
 Q1 2026,2026-01-01,2026-04-01,v6 baseline,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+Q1 2026,2026-01-01,2026-04-01,v6.1 adaptive checkpoint-only,pass,2026-02-11 12:00,10.00,3.98,4.05,11,72.73,0.00,2957.79,4043.36,0,4,7,0,0,0,0,0,0,80,40,6,0,true,8,BUY_BIAS,TARGET_HIT,true,"Original pass preserved; adaptive effective=4 after checkpoint"

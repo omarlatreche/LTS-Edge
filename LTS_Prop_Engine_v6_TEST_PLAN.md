@@ -172,3 +172,106 @@ Candidate v6 matrix from this session:
 Key lesson:
 
 v6 is now safer than v5 in bad windows and modestly better overall, but it still has the same pass count. Next work should focus on converting +5% to +10% campaigns, especially by investigating high `risk` rejects, while avoiding any change that reopens the May-Aug 2024 drawdown problem.
+
+## 2026-05-08 Diagnostic Follow-Up
+
+The `2024.08 -> 2024.11` retest showed `risk=11471` with `momentum=3` losses and `pullback=3` losses. That indicates the active modules hit `StrategyMaxLossTrades=3` and then repeatedly reported disabled-module rejects for the rest of the run.
+
+v6.1 code hygiene change:
+
+- Moved strategy-disable checks after the relevant new-bar check.
+- Count strategy P/L and strategy loss-count disables once per module instead of once per evaluation loop.
+- Kept the aggregate `risk` reject total for compatibility, but `RiskRejectDetail` is now the decision field.
+
+Next targeted test:
+
+- Recompile v6.1 in MetaEditor.
+- Re-run `2024.08.01 -> 2024.11.01`.
+- Confirm the summary includes `RiskRejectDetail`.
+- If `strategyLosses` is still the dominant blocker, test `StrategyMaxLossTrades=4` before changing entries or start-gate logic.
+
+Diagnostic result:
+
+| Window | Return | PF | Max DD | Trades | Risk detail | Read |
+|---|---:|---:|---:|---:|---|---|
+| `2024.08 -> 2024.11` | +2.97% | 1.45 | 3.69% | 11 | `openCap=0 dailySoft=0 propRoom=0 strategyPL=0 strategyLosses=2` | Both active modules hit the 3-loss shutoff; risk room is not the blocker. |
+
+Next controlled setting:
+
+`StrategyMaxLossTrades=4`, with all other v6.1 baseline settings unchanged.
+
+Controlled test result:
+
+| Window | Setting | Return | PF | Max DD | Trades | Target | Read |
+|---|---|---:|---:|---:|---:|---|---|
+| `2024.08 -> 2024.11` | `StrategyMaxLossTrades=4` | +10.00% | 4.10 | 3.20% | 10 | 2024.08.20 11:01 | Converted from non-pass to pass with no risk rejects. |
+
+Candidate conclusion:
+
+`StrategyMaxLossTrades=4` is now the leading v6.1 change. It must be re-tested against bad windows, especially `2024.05 -> 2024.08`, before becoming the new default.
+
+Bad-window check:
+
+| Window | Setting | Return | PF | Max DD | Trades | Risk detail | Read |
+|---|---|---:|---:|---:|---:|---|---|
+| `2024.05 -> 2024.08` | `StrategyMaxLossTrades=4` | -1.90% | 0.64 | 3.78% | 8 | `strategyPL=1 strategyLosses=1` | Worse than baseline -0.83%, but drawdown did not expand beyond the prior 3.78% area. |
+
+Decision note:
+
+The `4` setting adds enough runway to pass Aug-Oct 2024, but costs about 1.07 percentage points in the May-Aug 2024 bad window. Continue testing on `2024.09 -> 2024.12` and `2025.09 -> 2025.12` before deciding whether the trade-off is worth making default.
+
+Follow-up strong-window check:
+
+| Window | Setting | Return | PF | Max DD | Trades | Read |
+|---|---|---:|---:|---:|---:|---|
+| `2024.09 -> 2024.12` | `StrategyMaxLossTrades=4` | +1.15% | 1.21 | 4.26% | 10 | Worse than the +2.18% baseline; not a universal improvement. |
+| `2025.09 -> 2025.12` | `StrategyMaxLossTrades=4` | +10.00% | 3.55 | 2.59% | 13 | Converted the +7.45% baseline into a pass; campaign score finished at 5. |
+
+Emerging design:
+
+`StrategyMaxLossTrades=4` is powerful in genuine strong campaigns, but too permissive in weaker/non-checkpoint windows. The likely v6.1 implementation should keep the base module shutoff at 3 and allow one extra loss only after the campaign has reached checkpoint.
+
+## v6.1 Adaptive Loss-Limit Candidate
+
+Implementation added:
+
+| Input | Value | Purpose |
+|---|---:|---|
+| `StrategyMaxLossTrades` | `3` | Base module loss-count shutoff. |
+| `UseAdaptiveStrategyLossLimit` | `true` | Enable adaptive checkpoint runway. |
+| `StrategyMaxLossTradesStrong` | `4` | Module loss-count shutoff after checkpoint. |
+
+Effective rule:
+
+- Use `3` by default.
+- Use `4` if the campaign checkpoint has been reached.
+
+Validation order:
+
+1. `2024.08 -> 2024.11`: should retain the pass.
+2. `2025.09 -> 2025.12`: should retain the pass.
+3. `2024.05 -> 2024.08`: should move closer to baseline bad-window containment than global `4`.
+4. `2024.09 -> 2024.12`: should improve versus global `4`.
+
+Adaptive validation results:
+
+| Window | Return | PF | Max DD | Trades | Effective limit | Read |
+|---|---:|---:|---:|---:|---|---|
+| `2024.08 -> 2024.11` | +10.00% | 4.10 | 3.20% | 10 | `4` after checkpoint | Retained the global-4 pass. |
+| `2025.09 -> 2025.12` | +10.00% | 3.55 | 2.59% | 13 | `4` after checkpoint | Retained the global-4 pass. |
+| `2024.05 -> 2024.08` | -1.90% | 0.64 | 3.78% | 8 | `4` from score before checkpoint | Failed containment test; score-based pre-checkpoint unlock is too permissive. |
+| `2024.05 -> 2024.08` | -0.83% | 0.81 | 3.78% | 7 | `3`, no checkpoint | Corrected checkpoint-only adaptive restored baseline containment. |
+| `2024.09 -> 2024.12` | +2.17% | 1.48 | 4.26% | 9 | `3`, no checkpoint | Avoided global-4 degradation and returned to baseline-like behavior. |
+| `2024.01 -> 2024.04` | +10.00% | 10.39 | 3.10% | 7 | `4` after checkpoint | Original pass preserved. |
+| `2026.01 -> 2026.04` | +10.00% | 3.98 | 4.05% | 11 | `4` after checkpoint | Original pass preserved. |
+
+Current checkpoint-only adaptive read:
+
+- Confirmed passes: 4 windows (`2024.01`, `2024.08`, `2025.09`, `2026.01`).
+- Preserved bad-window containment on `2024.05 -> 2024.08`.
+- Avoided the global-4 degradation on `2024.09 -> 2024.12`.
+- This is the current v6.1 candidate baseline.
+
+Revision:
+
+Remove the pre-checkpoint `CampaignRegimeScore >= CampaignPushMinScore` unlock. v6.1 adaptive should grant `StrategyMaxLossTradesStrong=4` only after the checkpoint has been reached.

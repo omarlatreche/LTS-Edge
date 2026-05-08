@@ -8,7 +8,7 @@
 //+------------------------------------------------------------------+
 #property copyright "LTS Prop Engine v6"
 #property link      ""
-#property version   "6.00"
+#property version   "6.01"
 #property strict
 
 //+------------------------------------------------------------------+
@@ -60,6 +60,8 @@ input double   MaxTotalOpenRiskPct       = 1.00;
 input double   MinRiskPct                = 0.10;
 input double   StrategyMaxLossPct        = 1.25;    // Disable a module after this closed loss
 input int      StrategyMaxLossTrades     = 3;       // Disable a module after this many closed losses
+input bool     UseAdaptiveStrategyLossLimit = true; // Allow more module runway after checkpoint
+input int      StrategyMaxLossTradesStrong = 4;     // Module loss limit after checkpoint
 
 // --- Trading session ---
 input int      SessionStartHour          = 7;       // UK time
@@ -203,6 +205,8 @@ int      g_rejectRegime             = 0;
 int      g_rejectDXY                = 0;
 int      g_rejectSpread             = 0;
 int      g_campaignScore            = 0;
+bool     g_strategyPLCounted[4];
+bool     g_strategyLossCounted[4];
 
 //+------------------------------------------------------------------+
 //| Trade setup structure                                             |
@@ -425,6 +429,9 @@ void PrintTestSummary(const int reason)
          " | riskStd=", DoubleToString(StandardRiskPct, 2),
          " | riskHigh=", DoubleToString(HighConvictionRiskPct, 2),
          " | maxOpenRisk=", DoubleToString(MaxTotalOpenRiskPct, 2),
+         " | lossTrades=", StrategyMaxLossTrades,
+         " | adaptiveLoss=", UseAdaptiveStrategyLossLimit,
+         " | strongLossTrades=", StrategyMaxLossTradesStrong,
          " | dxy=", (StringLen(g_activeDXYSymbol) > 0 ? g_activeDXYSymbol : "none"));
    Print("=====================================");
 }
@@ -462,6 +469,10 @@ void OnDeinit(const int reason)
          " propRoom=", g_rejectRiskPropRoom,
          " strategyPL=", g_rejectRiskStrategyPL,
          " strategyLosses=", g_rejectRiskStrategyLosses);
+   Print("AdaptiveLossLimit: enabled=", UseAdaptiveStrategyLossLimit,
+         " base=", StrategyMaxLossTrades,
+         " strong=", StrategyMaxLossTradesStrong,
+         " effective=", EffectiveStrategyMaxLossTrades());
 }
 
 //+------------------------------------------------------------------+
@@ -666,10 +677,10 @@ int StartGateDirection()
 //+------------------------------------------------------------------+
 bool BuildSqueezeSetup(TradeSetup &setup)
 {
-   if(!StrategyEnabled(1))
+   if(!IsNewBar(SqueezeTF, g_lastSqueezeBarTime))
       return false;
 
-   if(!IsNewBar(SqueezeTF, g_lastSqueezeBarTime))
+   if(!StrategyEnabled(1))
       return false;
 
    bool inSqueeze = CheckSqueeze(Symbol(), SqueezeTF, 1);
@@ -737,10 +748,10 @@ bool BuildSqueezeSetup(TradeSetup &setup)
 //+------------------------------------------------------------------+
 bool BuildMomentumSetup(TradeSetup &setup)
 {
-   if(!StrategyEnabled(2))
+   if(!IsNewBar(MomentumTF, g_lastMomentumBarTime))
       return false;
 
-   if(!IsNewBar(MomentumTF, g_lastMomentumBarTime))
+   if(!StrategyEnabled(2))
       return false;
 
    double adx = iADX(Symbol(), MomentumTF, ADXPeriod, PRICE_CLOSE, MODE_MAIN, 1);
@@ -796,10 +807,10 @@ bool BuildMomentumSetup(TradeSetup &setup)
 //+------------------------------------------------------------------+
 bool BuildPullbackSetup(TradeSetup &setup)
 {
-   if(!StrategyEnabled(3))
+   if(!IsNewBar(PullbackTF, g_lastPullbackBarTime))
       return false;
 
-   if(!IsNewBar(PullbackTF, g_lastPullbackBarTime))
+   if(!StrategyEnabled(3))
       return false;
 
    double adx = iADX(Symbol(), PullbackTF, ADXPeriod, PRICE_CLOSE, MODE_MAIN, 1);
@@ -1409,7 +1420,9 @@ void UpdateClosedTradeState()
 
 bool StrategyEnabled(int strategyId)
 {
-   if(StrategyMaxLossPct <= 0 && StrategyMaxLossTrades <= 0)
+   int lossTradeLimit = EffectiveStrategyMaxLossTrades();
+
+   if(StrategyMaxLossPct <= 0 && lossTradeLimit <= 0)
       return true;
 
    double maxLossMoney = g_startBalance * StrategyMaxLossPct / 100.0;
@@ -1434,19 +1447,57 @@ bool StrategyEnabled(int strategyId)
 
    if(StrategyMaxLossPct > 0 && pl <= -maxLossMoney)
    {
-      g_rejectRisk++;
-      g_rejectRiskStrategyPL++;
+      if(!g_strategyPLCounted[strategyId])
+      {
+         g_rejectRisk++;
+         g_rejectRiskStrategyPL++;
+         g_strategyPLCounted[strategyId] = true;
+         if(EnableDiagnostics)
+         {
+            Print("Strategy disabled by P/L: id=", strategyId,
+                  " pl=", DoubleToString(pl, 2),
+                  " limit=-", DoubleToString(maxLossMoney, 2));
+         }
+      }
       return false;
    }
 
-   if(StrategyMaxLossTrades > 0 && losses >= StrategyMaxLossTrades)
+   if(lossTradeLimit > 0 && losses >= lossTradeLimit)
    {
-      g_rejectRisk++;
-      g_rejectRiskStrategyLosses++;
+      if(!g_strategyLossCounted[strategyId])
+      {
+         g_rejectRisk++;
+         g_rejectRiskStrategyLosses++;
+         g_strategyLossCounted[strategyId] = true;
+         if(EnableDiagnostics)
+         {
+            Print("Strategy disabled by loss count: id=", strategyId,
+                  " losses=", losses,
+                  " limit=", lossTradeLimit,
+                  " adaptive=", UseAdaptiveStrategyLossLimit,
+                  " checkpoint=", g_campaignCheckpointHit);
+         }
+      }
       return false;
    }
 
    return true;
+}
+
+int EffectiveStrategyMaxLossTrades()
+{
+   int baseLimit = StrategyMaxLossTrades;
+
+   if(!UseAdaptiveStrategyLossLimit)
+      return baseLimit;
+
+   if(StrategyMaxLossTradesStrong <= baseLimit)
+      return baseLimit;
+
+   if(g_campaignCheckpointHit)
+      return StrategyMaxLossTradesStrong;
+
+   return baseLimit;
 }
 
 void SetCampaignState(int newState, string reason)
@@ -1900,7 +1951,7 @@ void UpdateChartDisplay()
    double targetPct = GetTargetPct();
 
    string text = "";
-   text += "=== LTS Prop Engine v6.0 ===\n";
+   text += "=== LTS Prop Engine v6.1 ===\n";
    text += "Symbol: " + Symbol() + " | Spread: " + DoubleToString(spreadPips, 1) + " pips\n";
    text += "State: " + CampaignStateName() + "\n";
    if(UseStartGate)
