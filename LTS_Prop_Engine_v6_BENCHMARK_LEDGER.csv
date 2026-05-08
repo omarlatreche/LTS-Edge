@@ -3,8 +3,11 @@ Jan 2024,2024-01-01,2024-04-01,v6 baseline,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
 Jan 2024,2024-01-01,2024-04-01,v6.1 adaptive checkpoint-only,pass,2024-03-06 16:32,10.00,10.39,3.10,7,85.71,0.00,1912.24,5090.25,0,3,5,0,0,0,0,0,0,508,11,9,0,true,7,BUY_BIAS,TARGET_HIT,true,"Original pass preserved; adaptive effective=4 after checkpoint"
 Feb 2024,2024-02-01,2024-05-01,v6 baseline,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
 Feb 2024,2024-02-01,2024-05-01,v6.1 adaptive checkpoint-only,no pass,,3.04,1.36,5.57,14,42.86,0.00,1347.48,780.01,0,7,7,2,0,0,0,0,2,371,3,12,0,true,7,BUY_BIAS,PROTECTING_PROFIT,true,"Checkpoint reached but did not convert; both modules hit strong 4-loss limit"
+Feb 2024,2024-02-01,2024-05-01,v6.2 weak guard close,no pass,,3.17,1.50,4.07,13,38.46,0.00,1348.51,873.18,0,7,6,2,0,0,0,0,2,297,3,8,0,true,7,BUY_BIAS,PROTECTING_PROFIT,true,"Close-on-weak guard improved DD from 5.57 to 4.07 with slight return lift"
 Mar 2024,2024-03-01,2024-06-01,v6 baseline,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
 Mar 2024,2024-03-01,2024-06-01,v6.1 adaptive checkpoint-only,no pass,,1.49,1.18,7.06,13,38.46,0.00,1678.60,-638.96,0,7,6,1,0,0,0,0,1,247,2,16,0,true,7,BUY_BIAS,FAILED_STANDDOWN,true,"Checkpoint hit early then gave back to campaign floor; max DD 7.06 is a caution"
+Mar 2024,2024-03-01,2024-06-01,v6.2 weak guard no close,no pass,,1.48,1.18,7.06,13,38.46,0.00,1677.28,-638.87,0,7,6,1,0,0,0,0,1,53,2,13,0,true,7,BUY_BIAS,FAILED_STANDDOWN,true,"Weak guard blocked 3900 checks but result unchanged; giveback likely from already-open trades"
+Mar 2024,2024-03-01,2024-06-01,v6.2 weak guard close,no pass,,1.58,1.26,4.41,12,33.33,0.00,1374.57,-272.02,0,7,5,2,0,0,0,0,2,51,2,10,0,true,7,BUY_BIAS,PROTECTING_PROFIT,true,"Close-on-weak guard reduced DD from 7.06 to 4.41 and avoided floor failure; return only slightly better"
 Apr 2024,2024-04-01,2024-07-01,v6 baseline,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
 Apr 2024,2024-04-01,2024-07-01,v6.1 adaptive checkpoint-only,no pass,,-1.08,0.69,3.07,6,33.33,0.00,-892.53,135.63,0,1,5,2,0,0,0,1,1,17,0,7,0,true,7,BUY_BIAS,ACTIVE_CHALLENGE,false,"No checkpoint so effective=3; controlled weak-window loss"
 May 2024,2024-05-01,2024-08-01,v6 baseline,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
@@ -14,6 +17,7 @@ May 2024,2024-05-01,2024-08-01,v6.1 adaptive checkpoint-only,no pass,,-0.83,0.81
 Aug 2024,2024-08-01,2024-11-01,v6.1 diagnostic,no pass,,2.97,1.45,3.69,11,45.45,0.00,200.04,1881.82,0,5,6,2,0,0,0,0,2,153,0,4,0,true,8,BUY_BIAS,PROTECTING_PROFIT,true,"Checkpoint hit Aug 13 then both active modules disabled at 3 losses; next test StrategyMaxLossTrades=4"
 Aug 2024,2024-08-01,2024-11-01,v6.1 StrategyMaxLossTrades=4,pass,2024-08-20 11:01,10.00,4.10,3.20,10,70.00,0.00,2623.68,4376.95,0,2,8,0,0,0,0,0,0,60,0,4,0,true,8,BUY_BIAS,TARGET_HIT,true,"Changing only StrategyMaxLossTrades 3->4 converted window to pass; no risk rejects"
 Aug 2024,2024-08-01,2024-11-01,v6.1 adaptive loss limit,pass,2024-08-20 11:01,10.00,4.10,3.20,10,70.00,0.00,2623.56,4376.70,0,2,8,0,0,0,0,0,0,60,0,4,0,true,8,BUY_BIAS,TARGET_HIT,true,"Adaptive effective=4 after checkpoint; retained global-4 pass"
+Aug 2024,2024-08-01,2024-11-01,v6.2 weak guard close,no pass,,5.43,1.80,3.28,18,55.56,0.00,2865.02,933.58,0,12,6,2,0,0,0,0,2,81,0,4,0,true,8,BUY_BIAS,PROTECTING_PROFIT,true,"Close-on-weak guard killed prior pass; not suitable as default"
 Sep 2024,2024-09-01,2024-12-01,v6 baseline,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
 Sep 2024,2024-09-01,2024-12-01,v6.1 StrategyMaxLossTrades=4,no pass,,1.15,1.21,4.26,10,40.00,0.00,1738.08,-929.76,0,8,2,2,0,0,0,1,1,207,12,2,0,true,7,BUY_BIAS,ACTIVE_CHALLENGE,false,"Worse than baseline +2.18; pullback lost and both module shutoffs fired"
 Sep 2024,2024-09-01,2024-12-01,v6.1 adaptive checkpoint-only,no pass,,2.17,1.48,4.26,9,44.44,0.00,2451.14,-929.61,0,7,2,2,0,0,0,1,1,111,12,0,0,true,7,BUY_BIAS,ACTIVE_CHALLENGE,false,"No checkpoint so effective=3; restored baseline-like result and avoided global-4 degradation"
@@ -22,6 +26,7 @@ Oct 2024,2024-10-01,2025-01-01,v6.1 adaptive checkpoint-only,no pass,,-0.57,0.87
 Nov 2024,2024-11-01,2025-02-01,v6 baseline,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
 Q1 2025,2025-01-01,2025-04-01,v6 baseline,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
 Q1 2025,2025-01-01,2025-04-01,v6.1 adaptive checkpoint-only,no pass,,4.06,1.72,2.90,11,45.45,0.00,-1403.93,4245.30,0,2,9,2,0,0,0,1,1,35,128,10,0,true,7,BUY_BIAS,PROTECTING_PROFIT,true,"Checkpoint reached; pullback carried but momentum hurt; improved versus earlier matrix but no pass"
+Q1 2025,2025-01-01,2025-04-01,v6.2 weak guard close,no pass,,4.25,1.79,2.74,11,45.45,0.00,-1403.44,4379.66,0,2,9,2,0,0,0,1,1,35,128,10,0,true,7,BUY_BIAS,PROTECTING_PROFIT,true,"Close-on-weak guard slightly improved return/PF and reduced DD from 2.90 to 2.74"
 Q2 2025,2025-05-01,2025-08-01,v6 baseline,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
 Q2 2025,2025-05-01,2025-08-01,v6.1 adaptive checkpoint-only,no pass,,-2.44,0.44,4.11,6,16.67,0.00,-1441.79,-263.43,0,2,4,2,0,0,0,1,1,57,57,0,0,true,7,BUY_BIAS,ACTIVE_CHALLENGE,false,"No checkpoint so effective=3; worst remaining controlled-loss window"
 Q3 2025,2025-09-01,2025-12-01,v6 baseline,,,,,,,,,,,,,,,,,,,,,,,,,,,,,

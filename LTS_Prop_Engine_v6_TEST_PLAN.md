@@ -298,6 +298,53 @@ Conclusion:
 
 v6.1 checkpoint-only adaptive improves pass count from 2 to 4 while preserving controlled losses in no-checkpoint weak windows. The main remaining risk is checkpoint giveback, especially `2024.03 -> 2024.06`, where max DD reached 7.06% after an early checkpoint.
 
+## v6.2 Checkpoint Weak-Push Guard
+
+Purpose:
+
+Reduce checkpoint giveback after +5% without killing strong campaigns.
+
+Implementation added:
+
+| Input | Value | Purpose |
+|---|---:|---|
+| `UseCheckpointWeakPushGuard` | `true` | After checkpoint, block new trades when campaign push score is weak. |
+| `CheckpointWeakGuardCloseTrades` | `false` | Keep open trades managed normally; do not force close on first guard trigger. |
+
+Rule:
+
+- Before checkpoint: no effect.
+- After checkpoint: if `CampaignRegimeScore < CampaignPushMinScore`, block new entries.
+- If the score recovers, new entries are allowed again.
+
+Validation order:
+
+1. `2024.03 -> 2024.06`: should improve from +1.49% and reduce 7.06% DD.
+2. `2024.02 -> 2024.05`: should improve from +3.04%.
+3. `2025.01 -> 2025.04`: should preserve more than +4.06%.
+4. Recheck pass windows `2024.08 -> 2024.11` and `2025.09 -> 2025.12`.
+
+Initial result:
+
+| Window | Setting | Return | PF | Max DD | Trades | Weak guard blocks | Read |
+|---|---|---:|---:|---:|---:|---:|---|
+| `2024.03 -> 2024.06` | close trades `false` | +1.48% | 1.18 | 7.06% | 13 | 3900 | No improvement; giveback likely came from already-open trades rather than new entries after the weak guard. |
+| `2024.03 -> 2024.06` | close trades `true` | +1.58% | 1.26 | 4.41% | 12 | 5244 | Meaningfully reduced drawdown and avoided campaign-floor failure, but did not recover much return. |
+| `2024.02 -> 2024.05` | close trades `true` | +3.17% | 1.50 | 4.07% | 13 | 3216 | Reduced drawdown from 5.57% to 4.07% with slight return improvement. |
+| `2025.01 -> 2025.04` | close trades `true` | +4.25% | 1.79 | 2.74% | 11 | 3336 | Slightly improved return/PF and reduced drawdown from 2.90% to 2.74%. |
+| `2024.08 -> 2024.11` | close trades `true` | +5.43% | 1.80 | 3.28% | 18 | 4536 | Failed pass-preservation check; prior v6.1 pass dropped to non-pass. |
+
+Next controlled test:
+
+Close-on-weak guard is not suitable as a default because it killed the `2024.08 -> 2024.11` pass. Revert `UseCheckpointWeakPushGuard=false` and `CheckpointWeakGuardCloseTrades=false` for baseline, or explore a softer profit-lock guard rather than immediate close.
+
+v6.2 verdict:
+
+- Keep the weak-push guard code as optional research tooling.
+- Default `UseCheckpointWeakPushGuard=false`.
+- Default `CheckpointWeakGuardCloseTrades=false`.
+- Current baseline remains v6.1 checkpoint-only adaptive module loss limits.
+
 Revision:
 
 Remove the pre-checkpoint `CampaignRegimeScore >= CampaignPushMinScore` unlock. v6.1 adaptive should grant `StrategyMaxLossTradesStrong=4` only after the checkpoint has been reached.

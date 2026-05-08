@@ -8,7 +8,7 @@
 //+------------------------------------------------------------------+
 #property copyright "LTS Prop Engine v6"
 #property link      ""
-#property version   "6.01"
+#property version   "6.20"
 #property strict
 
 //+------------------------------------------------------------------+
@@ -49,6 +49,8 @@ input double   CampaignCheckpointPct     = 5.0;     // Protect once this profit 
 input double   CampaignProfitFloorPct    = 1.5;     // Stop if checkpoint profit gives back to here
 input int      CampaignPushMinScore      = 4;       // 0-5 regime score needed to continue after checkpoint
 input double   CampaignMaxRiskPct        = 1.00;    // Max risk after checkpoint, even in strong regimes
+input bool     UseCheckpointWeakPushGuard = false;  // Stop new trades after checkpoint if push score is weak
+input bool     CheckpointWeakGuardCloseTrades = false; // Close open trades when weak guard blocks
 input bool     CampaignHaltIfWeak        = false;   // Stop at checkpoint if regime is not strong
 input bool     CampaignCloseOnWeak       = false;   // Close open trades when weak-stop triggers
 
@@ -207,6 +209,8 @@ int      g_rejectSpread             = 0;
 int      g_campaignScore            = 0;
 bool     g_strategyPLCounted[4];
 bool     g_strategyLossCounted[4];
+int      g_checkpointWeakGuardBlocks = 0;
+bool     g_checkpointWeakGuardActive = false;
 
 //+------------------------------------------------------------------+
 //| Trade setup structure                                             |
@@ -257,6 +261,8 @@ int OnInit()
    Print("Campaign mode: ", UseCampaignMode,
          " | checkpoint ", DoubleToString(CampaignCheckpointPct, 1),
          "% | push score ", CampaignPushMinScore);
+   Print("Checkpoint weak guard: ", UseCheckpointWeakPushGuard,
+         " | close trades=", CheckpointWeakGuardCloseTrades);
    Print("Loss buffers: daily ", DoubleToString(MaxDailyLossPct, 1),
          "% | overall ", DoubleToString(MaxOverallLossPct, 1), "%");
    Print("Risk: standard ", DoubleToString(StandardRiskPct, 2),
@@ -404,6 +410,8 @@ void PrintTestSummary(const int reason)
    Print("Campaign: checkpoint=", g_campaignCheckpointHit,
          " | protected=", g_campaignProtected,
          " | score=", g_campaignScore,
+         " | weakGuardActive=", g_checkpointWeakGuardActive,
+         " | weakGuardBlocks=", g_checkpointWeakGuardBlocks,
          " | peakEquity=", DoubleToString(g_peakEquity, 2),
          " | startGateOpened=", g_startGateOpened,
          " | startScore=", g_startGateScore, "/8",
@@ -426,6 +434,7 @@ void PrintTestSummary(const int reason)
          " | peakDDStop=", DoubleToString(PeakDrawdownStopPct, 1),
          " | checkpoint=", DoubleToString(CampaignCheckpointPct, 1),
          " | floor=", DoubleToString(CampaignProfitFloorPct, 1),
+         " | weakGuard=", UseCheckpointWeakPushGuard,
          " | riskStd=", DoubleToString(StandardRiskPct, 2),
          " | riskHigh=", DoubleToString(HighConvictionRiskPct, 2),
          " | maxOpenRisk=", DoubleToString(MaxTotalOpenRiskPct, 2),
@@ -458,6 +467,8 @@ void OnDeinit(const int reason)
    Print("Campaign: checkpoint=", g_campaignCheckpointHit,
          " protected=", g_campaignProtected,
          " score=", g_campaignScore,
+         " weakGuardActive=", g_checkpointWeakGuardActive,
+         " weakGuardBlocks=", g_checkpointWeakGuardBlocks,
          " return=", DoubleToString(CurrentReturnPct(), 2), "%");
    Print("Rejects: risk=", g_rejectRisk,
          " regime=", g_rejectRegime,
@@ -1019,6 +1030,21 @@ bool CanTradeNow()
          return false;
       }
 
+      if(UseCampaignMode && g_campaignCheckpointHit && UseCheckpointWeakPushGuard && !CampaignAllowsPush())
+      {
+         g_checkpointWeakGuardBlocks++;
+         if(!g_checkpointWeakGuardActive)
+         {
+            g_checkpointWeakGuardActive = true;
+            Print("CHECKPOINT WEAK GUARD: blocking new trades, score ",
+                  g_campaignScore, "/", CampaignPushMinScore,
+                  " return=", DoubleToString(CurrentReturnPct(), 2), "%");
+            if(CheckpointWeakGuardCloseTrades)
+               CloseAllOpenTrades("Checkpoint weak guard");
+         }
+         return false;
+      }
+
       if(g_consecutiveLosses >= MaxConsecutiveLosses)
       {
          g_haltedToday = true;
@@ -1187,6 +1213,18 @@ void ManageCampaignMode()
 
    if(!g_campaignCheckpointHit)
       return;
+
+   if(UseCheckpointWeakPushGuard)
+   {
+      bool weakPush = !CampaignAllowsPush();
+      if(!weakPush && g_checkpointWeakGuardActive)
+      {
+         g_checkpointWeakGuardActive = false;
+         Print("CHECKPOINT WEAK GUARD CLEARED: score ",
+               g_campaignScore, "/", CampaignPushMinScore,
+               " return=", DoubleToString(returnPct, 2), "%");
+      }
+   }
 
    if(CampaignProfitFloorPct > 0 && returnPct <= CampaignProfitFloorPct)
    {
