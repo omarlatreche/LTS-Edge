@@ -272,6 +272,32 @@ Current checkpoint-only adaptive read:
 - Avoided the global-4 degradation on `2024.09 -> 2024.12`.
 - This is the current v6.1 candidate baseline.
 
+Remaining matrix results:
+
+| Window | Return | PF | Max DD | Trades | State | Read |
+|---|---:|---:|---:|---:|---|---|
+| `2024.02 -> 2024.05` | +3.04% | 1.36 | 5.57% | 14 | `PROTECTING_PROFIT` | Checkpoint reached but did not convert; both active modules hit the strong 4-loss limit. |
+| `2024.03 -> 2024.06` | +1.49% | 1.18 | 7.06% | 13 | `FAILED_STANDDOWN` | Checkpoint hit early then gave back to campaign floor; drawdown is a caution. |
+| `2024.04 -> 2024.07` | -1.08% | 0.69 | 3.07% | 6 | `ACTIVE_CHALLENGE` | No checkpoint, effective limit stayed 3, controlled weak-window loss. |
+| `2024.10 -> 2025.01` | -0.57% | 0.87 | 3.28% | 7 | `ACTIVE_CHALLENGE` | No checkpoint, effective limit stayed 3, near-flat controlled loss. |
+| `2025.01 -> 2025.04` | +4.06% | 1.72 | 2.90% | 11 | `PROTECTING_PROFIT` | Checkpoint reached; pullback carried, momentum hurt, no pass. |
+| `2025.05 -> 2025.08` | -2.44% | 0.44 | 4.11% | 6 | `ACTIVE_CHALLENGE` | No checkpoint, effective limit stayed 3, worst remaining controlled-loss window. |
+
+Full v6.1 checkpoint-only adaptive snapshot:
+
+| Metric | Result |
+|---|---:|
+| Confirmed passes | 4 |
+| Tested benchmark windows | 12 |
+| Pass rate | 33.3% |
+| Worst return | -2.44% |
+| Worst max DD | 7.06% |
+| Passed windows | `2024.01`, `2024.08`, `2025.09`, `2026.01` |
+
+Conclusion:
+
+v6.1 checkpoint-only adaptive improves pass count from 2 to 4 while preserving controlled losses in no-checkpoint weak windows. The main remaining risk is checkpoint giveback, especially `2024.03 -> 2024.06`, where max DD reached 7.06% after an early checkpoint.
+
 Revision:
 
 Remove the pre-checkpoint `CampaignRegimeScore >= CampaignPushMinScore` unlock. v6.1 adaptive should grant `StrategyMaxLossTradesStrong=4` only after the checkpoint has been reached.
