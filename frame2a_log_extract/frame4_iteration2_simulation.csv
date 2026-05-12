@@ -1,0 +1,26 @@
+quarter,run_id,start,end,baseline_return_pct,baseline_max_dd_pct,baseline_checkpoint,baseline_target_hit,baseline_state,baseline_trades,abort_time,closed_trades_by_abort,checkpoint_by_abort,abort_equity_pct,aborted,blocked_trades,sim_return_pct,sim_target_hit,sim_max_dd_pct,sim_trades,baseline_negative_non_checkpoint,baseline_positive_non_checkpoint,false_abort_worse,pass_window_aborted
+2020Q1,2ba24ff70055,2020-01-01,2020-03-31,-3.28,5.35,false,false,ACTIVE_CHALLENGE,6,2020-01-31 00:00:00,5,false,-2.30,true,1,-2.30,false,4.96,5,true,false,false,false
+2020Q2,09b413eb0616,2020-04-01,2020-06-30,1.50,4.00,true,false,FAILED_STANDDOWN,9,2020-05-01 00:00:00,8,true,2.34,false,0,1.50,false,3.40,9,false,false,false,false
+2020Q3,6187479b7ff1,2020-07-01,2020-09-30,-3.48,3.61,false,false,ACTIVE_CHALLENGE,5,2020-07-31 00:00:00,5,false,-3.48,true,0,-3.48,false,4.22,5,true,false,false,false
+2020Q4,d0fbad63c109,2020-10-01,2020-12-31,-4.06,4.59,false,false,ACTIVE_CHALLENGE,4,2020-10-31 00:00:00,2,false,-2.01,false,0,-4.06,false,4.26,4,true,false,false,false
+2021Q1,37fef594de9f,2021-01-01,2021-03-31,-1.64,4.10,false,false,ACTIVE_CHALLENGE,8,2021-01-31 00:00:00,5,false,-1.41,true,3,-1.41,false,3.21,5,true,false,false,false
+2021Q2,6329579dc307,2021-04-01,2021-06-30,-4.66,5.75,false,false,ACTIVE_CHALLENGE,4,2021-05-01 00:00:00,2,false,-2.44,false,0,-4.66,false,5.88,4,true,false,false,false
+2021Q3,2d34047e3699,2021-07-01,2021-09-30,-3.95,4.12,false,false,ACTIVE_CHALLENGE,4,2021-07-31 00:00:00,2,false,-1.99,false,0,-3.95,false,4.42,4,true,false,false,false
+2021Q4,272e3f588e82,2021-10-01,2021-12-31,-1.09,2.40,false,false,ACTIVE_CHALLENGE,6,2021-10-31 00:00:00,3,false,-0.66,true,3,-0.66,false,3.38,3,true,false,false,false
+2022Q1,d57c2c163e9f,2022-01-01,2022-03-31,-3.41,3.72,false,false,ACTIVE_CHALLENGE,6,2022-01-31 00:00:00,6,false,-3.41,true,0,-3.41,false,3.76,6,true,false,false,false
+2022Q2,a176a2de3df2,2022-04-01,2022-06-30,0.31,2.64,false,false,ACTIVE_CHALLENGE,8,2022-05-01 00:00:00,2,false,-1.99,false,0,0.31,false,2.20,8,false,true,false,false
+2022Q3,83aebd677a7f,2022-07-01,2022-09-30,4.01,3.49,true,false,PROTECTING_PROFIT,14,2022-07-31 00:00:00,8,true,4.30,false,0,4.01,false,4.79,14,false,false,false,false
+2022Q4,28370740012f,2022-10-01,2022-12-30,-4.19,4.75,false,false,ACTIVE_CHALLENGE,5,2022-10-31 00:00:00,4,false,-3.22,true,1,-3.22,false,3.67,4,true,false,false,false
+2023Q1,cf2b9958e39b,2023-01-01,2023-03-31,-0.65,4.58,false,false,ACTIVE_CHALLENGE,10,2023-01-31 00:00:00,6,false,-1.88,true,4,-1.88,false,5.18,6,true,false,false,false
+2023Q2,920bc82125a2,2023-04-01,2023-06-30,-3.12,6.48,false,false,ACTIVE_CHALLENGE,6,2023-05-01 00:00:00,5,false,-2.14,true,1,-2.14,false,5.82,5,true,false,false,false
+2023Q3,35d46037cfe1,2023-07-01,2023-09-29,6.18,3.71,true,false,PROTECTING_PROFIT,8,2023-07-31 00:00:00,3,false,-0.05,true,5,-0.05,false,1.41,3,false,false,false,false
+2023Q4,1a53d6cc78ab,2023-10-01,2023-12-29,1.50,4.04,true,false,FAILED_STANDDOWN,5,2023-10-31 00:00:00,4,true,2.20,false,0,1.50,false,3.83,5,false,false,false,false
+2024Q1,2b9a85e9350d,2024-01-01,2024-03-28,10.00,3.10,true,true,TARGET_HIT,7,2024-01-31 00:00:00,0,false,0.00,false,0,10.00,true,2.72,7,false,false,false,false
+2024Q2,73a3da05b2d0,2024-04-01,2024-06-28,-1.08,3.07,false,false,ACTIVE_CHALLENGE,6,2024-05-01 00:00:00,6,false,-1.08,true,0,-1.08,false,2.83,6,true,false,false,false
+2024Q3,fea8b57db355,2024-07-01,2024-09-30,-3.22,3.83,false,false,ACTIVE_CHALLENGE,4,2024-07-31 00:00:00,4,false,-3.22,true,0,-3.22,false,3.69,4,true,false,false,false
+2024Q4,11ff37749d69,2024-10-01,2024-12-31,-0.57,3.28,false,false,ACTIVE_CHALLENGE,7,2024-10-31 00:00:00,7,false,-0.57,true,0,-0.57,false,2.37,7,true,false,false,false
+2025Q1,0fbdcfbba15a,2025-01-01,2025-03-31,4.04,2.91,true,false,PROTECTING_PROFIT,11,2025-01-31 00:00:00,11,true,4.05,false,0,4.04,false,2.80,11,false,false,false,false
+2025Q2,da23315ad376,2025-04-01,2025-06-30,1.01,3.35,false,false,ACTIVE_CHALLENGE,10,2025-05-01 00:00:00,8,false,3.13,false,0,1.01,false,3.44,10,false,true,false,false
+2025Q3,97982e103501,2025-07-01,2025-09-30,-3.99,4.02,false,false,ACTIVE_CHALLENGE,4,2025-07-31 00:00:00,4,false,-3.99,true,0,-3.99,false,3.95,4,true,false,false,false
+2025Q4,bc27a6c87533,2025-10-01,2025-12-31,2.76,3.59,true,false,PROTECTING_PROFIT,14,2025-10-31 00:00:00,9,true,4.48,false,0,2.76,false,3.84,14,false,false,false,false
+2026Q1,b6ef72ca3f93,2026-01-01,2026-03-31,10.00,4.04,true,true,TARGET_HIT,11,2026-01-31 00:00:00,10,true,9.97,false,0,10.00,true,4.13,11,false,false,false,false

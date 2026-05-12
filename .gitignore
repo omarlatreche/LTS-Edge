@@ -2,3 +2,26 @@
 .claude/
 ai_filter.log
 ai_signal.txt
+
+# Secrets — never commit
+.env
+.env.local
+.env.*.local
+*.key
+secrets/
+
+# Python caches
+__pycache__/
+*.pyc
+
+# Bulky market CSVs — re-downloadable from Dukascopy (see V7_CLOSURE.md)
+DOLLARIDXUSD_Hourly_*.csv
+USA30IDXUSD_Hourly_*.csv
+USATECHIDXUSD_Hourly_*.csv
+EURUSD_4 Hours_*.csv
+USDJPY_4 Hours_*.csv
+EURUSD1440.csv
+XAUUSD1440.csv
+
+# CFTC COT files — re-fetchable from cftc.gov via v8_viability_screen.py
+v8_viability_data/cftc_*.csv
