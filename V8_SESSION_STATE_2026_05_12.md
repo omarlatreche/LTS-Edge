@@ -60,10 +60,10 @@ Outcome discipline:
 
 Scripts and data retained for inspection / future non-rescue event probes:
 
-- `v8_viability_screen.py`
-- `v8_viability_data/viability_screen_events.csv`
+- `v8_viability_screen.py` (parameterized via CLI arg: `eurusd` | `usdjpy`)
+- `v8_viability_data/viability_screen_events_eurusd.csv`
 - `v8_viability_data/viability_screen_events_usdjpy.csv`
-- `v8_viability_data/cftc_2018.csv` through `v8_viability_data/cftc_2026.csv`
+- `v8_viability_data/cftc_2018.csv` through `v8_viability_data/cftc_2026.csv` (gitignored; re-fetchable by running the screen)
 
 Downloaded/added market data:
 
@@ -88,15 +88,18 @@ Keep this change.
 
 ## Current Repo Packaging State
 
-No commit was made this session.
+Session work committed as `60424eb` ("Record v7 closure and v8 candidate 1 kill"). 21 files, includes v7 closure bundle, v8 prereg + Candidate 1 phase 0.5 + this session-state doc, viability screen script + event CSVs, and Frame 2A/4 simulators + parsed outputs.
 
-There are many uncommitted tracked and untracked artifacts from v6/v7/v8 research. Before new implementation work, review and package the closure/research state deliberately.
+`.gitignore` updated to exclude secrets, Python caches, bulky market CSVs, and CFTC annual files (all re-fetchable / re-downloadable).
 
-Suggested future packaging:
+Intentionally NOT committed (pre-date this session, need separate review):
 
-1. Commit closure/planning/research docs and small reproducibility artifacts.
-2. Decide whether bulky raw market CSVs belong in git or in an external data directory.
-3. Preserve generated research outputs that support recorded KILL decisions.
+- `LTS_Prop_Engine_v6.mq4` (EA source modifications)
+- `LTS_Prop_Engine_v6_BENCHMARK_LEDGER.csv`
+- `LTS_Prop_Engine_v6_TEST_PLAN.md`
+- `V6_HANDOVER_SUMMARY.md`
+
+These remain in the working tree. Next session should decide whether to fold them into a v6 archival commit or revert if they were experimental.
 
 ## Next Session
 
